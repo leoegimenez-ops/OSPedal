@@ -1,0 +1,23 @@
+# Modelos NAM/IR (pesan mucho, no van al repo)
+models/nam/*
+models/irs/*
+!models/nam/.gitkeep
+!models/irs/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build / ISO
+os/build/
+*.iso
+
+# Editor
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db
