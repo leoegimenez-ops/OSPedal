@@ -52,34 +52,69 @@ models/
 `models/aidax/` es nuevo — antes solo existían `nam/` e `irs/`. El usuario copia los archivos
 descargados de Tone3000 directamente a la carpeta que corresponda; no hay paso de instalación.
 
-### RPC: listar y recargar
+### El mecanismo real, verificado en el código fuente del motor
 
-Agregado a `engine/rpc_client.py`:
+Esta sección reemplaza lo que había escrito la primera vez, que era una suposición razonable
+(`get_file_list`) pero no la mecánica real. Fui a `gx_neural_plugins.h/.cpp` y `gx_engine.cpp` a
+confirmarlo.
+
+**`NeuralAmp` y `RtNeural` no son una propiedad del bloque "amp"** — son unidades de rack propias,
+con nombre de instancia fijo (`gx_engine.cpp:310-315`):
+
+| Ranura | Formato | Uso |
+|---|---|---|
+| `nam` | `.nam` | Instancia principal |
+| `snam` | `.nam` | Segunda instancia |
+| `mnam` | `.nam` | Modo A/B (blend entre dos modelos) |
+| `rtneural` | `.json` / `.aidax` | Instancia principal |
+| `srtneural` | `.json` / `.aidax` | Segunda instancia |
+| `mrtneural` | `.json` / `.aidax` | Modo A/B |
+
+Cada una expone dos parámetros de texto/número normales — **no hay ningún método RPC dedicado**,
+se cargan con el mismo `set` que cualquier otro parámetro:
+
+- **`<ranura>.loadpath`** (string): carpeta a escanear. Al cambiar, Guitarix dispara un rescan
+  interno (`create_nam_filelist()` / `create_rtneural_filelist()`) y arma una lista de hasta 126
+  archivos que matchean el sufijo exacto (`.nam`, o `.json`/`.aidax` para RTNeural).
+- **`<ranura>.flist`** (número): índice dentro de esa lista. `0` es siempre `"None"`; los archivos
+  ocupan del `1` en adelante, **en el orden que los devuelve el sistema de archivos — no
+  alfabético, no garantizado**.
+
+`loadpath` arranca vacío: no hay una carpeta fija de Guitarix que haya que descubrir o respetar.
+Apuntarlo a nuestro propio `models/nam/` es una decisión nuestra, no una convención ajena.
 
 ```python
-gx.archivos("nam")                    # lista de modelos disponibles (get_file_list)
-gx.directorios_impulse_response()     # directorios de IRs configurados (load_impresp_dirs)
-gx.recargar_impulse_responses()       # re-escanea sin reiniciar el motor (reload_impresp_list)
+gx.cargar_nam("/ruta/absoluta/a/una/subcarpeta/con/un/solo/archivo.nam")
+gx.cargar_rtneural("/ruta/a/carpeta", ranura="srtneural")   # segunda instancia
 ```
 
-Guitarix no vuelve a escanear la carpeta de IRs solo porque aparecieron archivos nuevos mientras
-corre — hay que pedírselo explícitamente después de que el usuario copie modelos. Por eso existe
-`recargar_impulse_responses()` como notificación separada.
+**La estrategia contra el orden no garantizado**: en vez de listar la carpeta completa y adivinar
+en qué posición quedó el archivo que queremos, `cargar_nam`/`cargar_rtneural` apuntan `loadpath` a
+una carpeta que contiene **un solo archivo** (o un symlink a él) y usan siempre `flist=1`. Es
+determinista sin depender de leer de vuelta el orden interno de Guitarix. La organización de esas
+sub-carpetas curadas (una por captura, o un symlink temporal armado al cargar un preset) queda
+para cuando se diseñe el gestor de archivos — la llamada RPC en sí ya funciona.
 
-**Nota de honestidad**: el nombre exacto de la categoría que espera `get_file_list` (si es
-`"nam"`, `"aidax"`, algo distinto, o si hace falta un método específico por tipo) no está
-verificado contra un Guitarix real todavía — está inferido del nombre del método y de que el
-manual dice que el Device List "muestra los puertos organizados en categorías". Falta confirmarlo
-cuando tengamos el motor corriendo. Los tres wrappers en sí (forma de la llamada, notificación vs.
-respuesta) sí están probados contra un servidor simulado que respeta el protocolo real.
+Verificado con un servidor simulado: la secuencia manda `<ranura>.loadpath` y después
+`<ranura>.flist`, ambos como notificaciones (sin esperar respuesta), con los nombres de parámetro
+exactos del código fuente.
+
+### Lo que sigue sin verificar
+
+Las **impulse responses de cabina (`.wav`)** usan un subsistema distinto (`load_impresp_dirs`,
+`reload_impresp_list`, en `gx_convolver.h`/`.cpp`) que todavía no revisé con el mismo nivel de
+detalle — no sé si sigue el mismo patrón `loadpath`+`flist` o algo distinto. Queda pendiente para
+la próxima vez que se toque el bloque CAB.
+
+`gx.archivos()` (que llama a `get_file_list`) se deja en el cliente pero **no se debe usar para
+cargar capturas** — no es el mecanismo real, ver arriba. Puede servir para otra cosa que todavía
+no identifiqué.
 
 ### Dónde aparece en la interfaz
 
-En el Editor de Nodos (mockup), el bloque **CAB** ya tiene un parámetro `LEVEL` pero le falta el
-selector del archivo IR en sí; el bloque **AMP** hoy es un amp simulado clásico de Guitarix, sin
-opción de cargar un modelo `.nam` en su lugar. Son cambios de UI pendientes, no de arquitectura:
-la data ya puede pedirse por RPC, falta el selector visual (una lista con `gx.archivos("nam")`,
-similar al Explorador de Presets que ya existe).
+En el Editor de Nodos (mockup), el sidebar de categorías ya tiene la sección "TUS CAPTURAS" para
+AMP y OVERDRIVE con nombres de archivo de ejemplo. Elegir un ítem ahí es, en el sistema real, el
+punto donde se dispararía `cargar_nam()`/`cargar_rtneural()` con la ruta correspondiente.
 
 ### Lo que queda para más adelante
 

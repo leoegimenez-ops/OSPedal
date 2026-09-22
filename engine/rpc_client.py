@@ -254,10 +254,12 @@ class GuitarixRPC:
         return self.llamar("get_rack_unit_order")
 
     def archivos(self, categoria: str) -> Any:
-        """Lista archivos disponibles para cargar en una unidad: modelos NAM/AIDA-X
-        para el amp, o impulse responses para la cabina. `categoria` es lo que
-        Guitarix espera en `get_file_list` (p. ej. "nam", "ir"); no está
-        verificado contra un Guitarix real, ver docs/capturas-neuronales.md.
+        """Llama a `get_file_list`. Existe en la tabla de métodos RPC pero no
+        pude confirmar para qué categoría de unidad está pensado ni la forma
+        exacta de `categoria` — **no es** el mecanismo real de NAM/RTNeural
+        (ver `cargar_nam`/`cargar_rtneural` más abajo, esos sí están
+        verificados contra el código fuente del motor). Se deja por si sirve
+        para otra cosa; no usar para cargar capturas todavía.
         """
         return self.llamar("get_file_list", categoria)
 
@@ -271,6 +273,52 @@ class GuitarixRPC:
 
     def directorios_impulse_response(self) -> Any:
         return self.llamar("load_impresp_dirs")
+
+    # -- Capturas NAM / RTNeural --------------------------------------------------
+    #
+    # Verificado en el código fuente del motor (gx_neural_plugins.cpp/.h,
+    # gx_engine.cpp): NeuralAmp y RtNeural NO son una propiedad del bloque
+    # "amp" — son unidades de rack propias, cada una con un par de parámetros
+    # de texto/número normales, sin ningún método RPC dedicado:
+    #
+    #   <ranura>.loadpath  (string)  carpeta a escanear; al cambiar dispara un
+    #                                rescan interno (create_nam_filelist)
+    #   <ranura>.flist     (número)  índice dentro de esa carpeta a cargar;
+    #                                0 siempre es "None", los archivos
+    #                                encontrados ocupan 1..126 en el orden que
+    #                                los devuelve el sistema de archivos (NO
+    #                                alfabético, no está garantizado)
+    #
+    # Guitarix filtra por sufijo exacto: ".nam" para NeuralAmp, ".json" o
+    # "idax" (".aidax") para RtNeural. `loadpath` arranca vacío — no hay
+    # convención de carpeta fija del lado de Guitarix, así que apuntarlo a
+    # nuestro propio models/nam o models/aidax es una decisión enteramente
+    # nuestra, no algo que haya que descubrir.
+    #
+    # Nombres de ranura reales (gx_engine.cpp:310-315):
+    #   nam / snam / mnam        -> NeuralAmp (mono, segunda instancia, A/B)
+    #   rtneural / srtneural / mrtneural -> RtNeural (mono, segunda, A/B)
+    #
+    # Como el orden de `flist` no está garantizado, en vez de adivinar el
+    # índice apuntamos `loadpath` a una carpeta que contenga solo el archivo
+    # que queremos (o un symlink a él) y usamos `flist=1` siempre — determinista,
+    # sin depender de leer de vuelta la lista que arma Guitarix.
+
+    def cargar_nam(self, carpeta: str, indice: int = 1, ranura: str = "nam") -> None:
+        """Carga un modelo .nam. `carpeta` es una ruta absoluta que Guitarix
+        va a escanear buscando archivos *.nam; `indice` es la posición dentro
+        de esa carpeta (1 = primer archivo encontrado). Si la carpeta tiene
+        un solo *.nam, `indice=1` siempre apunta a ese archivo sin ambigüedad.
+        `ranura`: "nam" (principal), "snam" (segunda) o "mnam" (modo A/B).
+        """
+        self.fijar(f"{ranura}.loadpath", carpeta)
+        self.fijar(f"{ranura}.flist", indice)
+
+    def cargar_rtneural(self, carpeta: str, indice: int = 1, ranura: str = "rtneural") -> None:
+        """Como `cargar_nam` pero para modelos .json/.aidax de RTNeural.
+        `ranura`: "rtneural", "srtneural" o "mrtneural" (modo A/B)."""
+        self.fijar(f"{ranura}.loadpath", carpeta)
+        self.fijar(f"{ranura}.flist", indice)
 
     def mapa_midi(self) -> Any:
         return self.llamar("get_midi_controller_map")
