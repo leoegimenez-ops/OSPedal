@@ -25,6 +25,8 @@ Cualquier interfaz de audio y cualquier controlador/pedal MIDI **class-compliant
 - [`docs/guitarix-rpc-methods.md`](docs/guitarix-rpc-methods.md) — referencia de los 90+ métodos RPC
 - [`docs/presets.md`](docs/presets.md) — formato de setlists y cómo se aplica un preset
 - [`docs/midi.md`](docs/midi.md) — parseo MIDI, mapeo de acciones y MIDI learn
+- [`docs/mockups.md`](docs/mockups.md) — mockups de interfaz (link al artifact interactivo)
+- [`docs/investigacion-neural-dsp.md`](docs/investigacion-neural-dsp.md) — investigación de Cortex Control (Neural DSP)
 
 ## Estructura del repositorio
 
