@@ -28,6 +28,7 @@ Cualquier interfaz de audio y cualquier controlador/pedal MIDI **class-compliant
 - [`docs/mockups.md`](docs/mockups.md) — mockups de interfaz (link al artifact interactivo)
 - [`docs/investigacion-neural-dsp.md`](docs/investigacion-neural-dsp.md) — investigación de Cortex Control (Neural DSP)
 - [`docs/capturas-neuronales.md`](docs/capturas-neuronales.md) — formatos .nam/.aidax/.wav, qué se puede y no se puede usar
+- [`docs/eq-y-compresores-abiertos.md`](docs/eq-y-compresores-abiertos.md) — alternativas LV2 abiertas a EQ/compresores comerciales
 
 ## Estructura del repositorio
 
