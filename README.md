@@ -24,6 +24,7 @@ Cualquier interfaz de audio y cualquier controlador/pedal MIDI **class-compliant
 - [`docs/guitarix-integracion.md`](docs/guitarix-integracion.md) — protocolo de control del motor DSP
 - [`docs/guitarix-rpc-methods.md`](docs/guitarix-rpc-methods.md) — referencia de los 90+ métodos RPC
 - [`docs/presets.md`](docs/presets.md) — formato de setlists y cómo se aplica un preset
+- [`docs/midi.md`](docs/midi.md) — parseo MIDI, mapeo de acciones y MIDI learn
 
 ## Estructura del repositorio
 

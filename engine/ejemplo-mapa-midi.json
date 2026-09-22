@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "nombre": "Pedalera genérica de 4 switches",
+  "canal": 0,
+  "programa_directo": true,
+  "asignaciones": [
+    {
+      "tipo": "control_change",
+      "numero": 80,
+      "accion": "preset_en_banco",
+      "parametro": 0
+    },
+    {
+      "tipo": "control_change",
+      "numero": 81,
+      "accion": "preset_en_banco",
+      "parametro": 1
+    },
+    {
+      "tipo": "control_change",
+      "numero": 82,
+      "accion": "banco_anterior"
+    },
+    {
+      "tipo": "control_change",
+      "numero": 83,
+      "accion": "banco_siguiente"
+    },
+    {
+      "tipo": "control_change",
+      "numero": 84,
+      "accion": "toggle_stomp",
+      "parametro": 0
+    },
+    {
+      "tipo": "control_change",
+      "numero": 85,
+      "accion": "tap_tempo"
+    },
+    {
+      "tipo": "note_on",
+      "numero": 60,
+      "accion": "afinador"
+    }
+  ]
+}

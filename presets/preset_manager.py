@@ -58,7 +58,7 @@ def _parametros(datos: dict[str, Any], ruta: str) -> dict[str, Any]:
     return dict(crudo)
 
 
-def _valor_rpc(valor: Any) -> Any:
+def valor_rpc(valor: Any) -> Any:
     """Adapta un valor al formato que espera el motor.
 
     Los parámetros booleanos de Guitarix se leen con getInt() (jsonrpc.cpp:1027), así que hay
@@ -220,7 +220,7 @@ class Preset:
         pares: list[Any] = []
         for nombre, valor in valores.items():
             pares.append(nombre)
-            pares.append(_valor_rpc(valor))
+            pares.append(valor_rpc(valor))
         return pares
 
 
