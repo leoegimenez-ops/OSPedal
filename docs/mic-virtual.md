@@ -1,5 +1,12 @@
 # Micrófono virtual: posición, distancia y tipo
 
+Mockup en vivo: el bloque **CAB** del Editor de Nodos ya tiene POSITION, DISTANCE y el selector
+de tipo de mic. Seleccionalo y bajá al panel de parámetros —
+**https://claude.ai/artifact/5sz1WM6dMB9PVdtNgD3Enw**. La vista previa ("graves +Xdb · corte de
+agudos en Yhz") usa el mismo cálculo que `engine/mic_virtual.py` (espejado en JS en el mockup,
+mismos números). Cargar una IR propia (categoría GABINETE → TUS IR) deshabilita POSITION y
+DISTANCE automáticamente, igual que en Cortex Control.
+
 ## Lo que tiene Cortex Control (verificado en el manual oficial)
 
 El bloque **Cab** de Cortex Control —distinto del bloque **IR Loader**— simula un micrófono
