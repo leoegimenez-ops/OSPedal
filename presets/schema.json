@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/leoegimenez-ops/OSPedal/blob/main/presets/schema.json",
+  "title": "Setlist de PedalSistema",
+  "description": "Estructura de datos de una setlist: Setlist > Banco (32) > Preset (8) = 256 presets. Es el contrato de intercambio entre el motor, la GUI, la PWA y el sync a la nube.",
+  "type": "object",
+  "required": ["version", "nombre", "bancos"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "Version del formato. Permite migrar setlists viejas cuando el esquema cambie.",
+      "type": "integer",
+      "const": 1
+    },
+    "nombre": { "type": "string", "minLength": 1 },
+    "descripcion": { "type": "string" },
+    "bancos": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/banco" }
+    }
+  },
+  "$defs": {
+    "banco": {
+      "type": "object",
+      "required": ["nombre", "presets"],
+      "additionalProperties": false,
+      "properties": {
+        "nombre": { "type": "string", "minLength": 1 },
+        "presets": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/preset" }
+        }
+      }
+    },
+    "preset": {
+      "type": "object",
+      "required": ["nombre"],
+      "additionalProperties": false,
+      "properties": {
+        "nombre": { "type": "string", "minLength": 1 },
+        "guitarix": {
+          "description": "Preset base de Guitarix sobre el que se aplican los parametros. Opcional: si se omite, se parte del estado actual del motor.",
+          "type": "object",
+          "required": ["banco", "preset"],
+          "additionalProperties": false,
+          "properties": {
+            "banco": { "type": "string", "minLength": 1 },
+            "preset": { "type": "string", "minLength": 1 }
+          }
+        },
+        "parametros": {
+          "description": "Snapshot de parametros de Guitarix, con ids tipo 'amp.stage1.gain'. Se mantiene en RAM y se aplica en una sola llamada set.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/valorParametro" }
+        },
+        "tempo_bpm": { "type": "number", "minimum": 20, "maximum": 300 },
+        "volumen": { "type": "number", "minimum": 0, "maximum": 1 },
+        "stomps": {
+          "description": "Asignacion de pedales en modo Stomp. Cada uno controla el on/off de una unidad del rack.",
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/stomp" }
+        },
+        "escenas": {
+          "description": "Variaciones dentro del mismo preset, conmutables sin corte de audio (modo Scene).",
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/escena" }
+        },
+        "notas": { "type": "string" }
+      }
+    },
+    "stomp": {
+      "type": "object",
+      "required": ["etiqueta", "unidad"],
+      "additionalProperties": false,
+      "properties": {
+        "etiqueta": {
+          "description": "Texto corto mostrado en el pedal y en la GUI.",
+          "type": "string",
+          "minLength": 1
+        },
+        "unidad": {
+          "description": "Id de la unidad del rack en Guitarix. El sistema controla '<unidad>.on_off'.",
+          "type": "string",
+          "minLength": 1
+        },
+        "activo": {
+          "description": "Estado inicial al cargar el preset.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "escena": {
+      "type": "object",
+      "required": ["nombre"],
+      "additionalProperties": false,
+      "properties": {
+        "nombre": { "type": "string", "minLength": 1 },
+        "parametros": {
+          "description": "Parametros que esta escena pisa sobre los del preset.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/valorParametro" }
+        }
+      }
+    },
+    "valorParametro": {
+      "description": "Guitarix acepta parametros float, int, bool, string y enum (por nombre).",
+      "type": ["number", "boolean", "string"]
+    }
+  }
+}

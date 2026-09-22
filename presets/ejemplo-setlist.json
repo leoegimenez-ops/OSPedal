@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "nombre": "Ejemplo",
+  "descripcion": "Setlist de demostración del formato. Ver presets/schema.json para el esquema completo.",
+  "bancos": [
+    {
+      "nombre": "Set 1",
+      "presets": [
+        {
+          "nombre": "Clean Verso",
+          "guitarix": { "banco": "Factory", "preset": "Clean" },
+          "parametros": {
+            "amp.stage1.gain": 0.35,
+            "amp.masterGain": 0.7
+          },
+          "tempo_bpm": 120,
+          "volumen": 0.8,
+          "stomps": [
+            { "etiqueta": "CHORUS", "unidad": "chorus", "activo": false },
+            { "etiqueta": "DELAY", "unidad": "echo", "activo": true }
+          ],
+          "escenas": [
+            {
+              "nombre": "Estrofa",
+              "parametros": { "echo.on_off": false }
+            },
+            {
+              "nombre": "Estribillo",
+              "parametros": { "amp.stage1.gain": 0.55, "echo.on_off": true }
+            }
+          ],
+          "notas": "Arranca limpio, el delay entra en el estribillo."
+        },
+        {
+          "nombre": "Crunch",
+          "guitarix": { "banco": "Factory", "preset": "Crunch" },
+          "parametros": { "amp.stage1.gain": 0.65 },
+          "tempo_bpm": 120,
+          "stomps": [
+            { "etiqueta": "TS", "unidad": "tubescreamer", "activo": true }
+          ]
+        },
+        {
+          "nombre": "Lead",
+          "parametros": {
+            "amp.stage1.gain": 0.85,
+            "amp.masterGain": 0.75
+          },
+          "tempo_bpm": 120,
+          "volumen": 1.0,
+          "stomps": [
+            { "etiqueta": "BOOST", "unidad": "tubescreamer", "activo": true },
+            { "etiqueta": "VERB", "unidad": "freeverb", "activo": true }
+          ],
+          "notas": "Sin preset base de Guitarix: parte del estado actual del motor."
+        }
+      ]
+    },
+    {
+      "nombre": "Set 2",
+      "presets": [
+        {
+          "nombre": "Acústico",
+          "guitarix": { "banco": "Factory", "preset": "Acoustic" },
+          "tempo_bpm": 95,
+          "volumen": 0.9
+        }
+      ]
+    }
+  ]
+}

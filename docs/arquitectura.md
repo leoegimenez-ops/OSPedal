@@ -31,6 +31,11 @@ control remoto descubra el equipo sin que el usuario tenga que escribir una IP (
 
 Setlist › Bank (32) › Preset (8) → 256 por setlist. Modos: Preset / Stomp / Scene (igual que Quad Cortex).
 
+La setlist es la fuente de verdad de la estructura de la performance y Guitarix la del estado de
+DSP. Formato propio en JSON (`presets/schema.json`), no delegado al sistema de bancos de
+Guitarix, porque éste no modela setlists, escenas, stomps ni tempo por tema, y porque el sync a
+la nube necesita un formato portable. Ver `docs/presets.md`.
+
 ## Separación de procesos
 
 - GUI **no** interfiere con audio: procesos separados, prioridades distintas.
