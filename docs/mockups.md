@@ -41,6 +41,16 @@ Al aplicar un estilo, tres barras (Drive / Espacio / Brillo) resumen su carácte
 en vez de partir de cero perilla por perilla, el músico arranca de un punto ya tocable y ajusta
 desde ahí.
 
+**Sidebar de categorías** (panel izquierdo, agregado a partir de una captura real de Cortex
+Control): rail de códigos cortos (OD, DIN, AMP, CAB, EQ, MOD, DLY, RVB) + lista del rubro
+abierto, igual al Device List real que ya habíamos documentado en
+`docs/guitarix-integracion.md`. Elegir un ítem lo carga en el bloque correspondiente de la
+cadena — el tile de la grilla queda genérico, pero el panel de parámetros muestra el nombre
+específico con una etiqueta "PROPIO". Las categorías donde Guitarix realmente acepta archivos
+(overdrive, dinámica, amp, cab) tienen una sección "TUS CAPTURAS · models/nam" o "TUS IR ·
+models/irs" — conecta directo con `docs/capturas-neuronales.md`: es el lugar de la interfaz
+donde aparecerían los `.nam`/`.aidax`/`.wav` que el usuario copie a esas carpetas.
+
 ## Identidad visual
 
 - **Fondo**: casi negro (`#0D0D0F`), pensado para escenario oscuro.
