@@ -18,6 +18,12 @@ Sistema operativo Linux dedicado para procesamiento de audio en vivo. Reemplaza 
 
 Cualquier interfaz de audio y cualquier controlador/pedal MIDI **class-compliant** (estándar USB Audio/MIDI Class). No requiere drivers de fabricante: el kernel Linux los detecta automáticamente. La selección y configuración del dispositivo de audio y del controlador MIDI se hace desde el propio sistema (pantalla de configuración), no hardcodeada por modelo.
 
+## Documentación
+
+- [`docs/arquitectura.md`](docs/arquitectura.md) — decisiones de arquitectura, jerarquía de datos, fases
+- [`docs/guitarix-integracion.md`](docs/guitarix-integracion.md) — protocolo de control del motor DSP
+- [`docs/guitarix-rpc-methods.md`](docs/guitarix-rpc-methods.md) — referencia de los 90+ métodos RPC
+
 ## Estructura del repositorio
 
 ```

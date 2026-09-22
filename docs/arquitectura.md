@@ -12,6 +12,21 @@ Implicancia para `engine/`:
 - `audio_engine.py` debe enumerar dispositivos ALSA/JACK disponibles en vez de asumir un dispositivo fijo.
 - `midi_engine.py` debe enumerar puertos MIDI disponibles (ALSA seq) y permitir mapeo de mensajes MIDI (CC/PC/Note) configurable por el usuario, no atado a un pedal específico.
 
+El mapeo MIDI no hace falta implementarlo desde cero: Guitarix expone un modo de aprendizaje
+(`midi_set_config_mode` + `get_last_midi_control_value`) que asocia un control físico a un
+parámetro con solo moverlo. Ver `docs/guitarix-rpc-methods.md`.
+
+## Control del motor DSP
+
+El motor se controla por **JSON-RPC 2.0 sobre socket TCP** (puerto 7000 por defecto), arrancando
+Guitarix en modo headless con `guitarix -N -p 7000`. Implementado en `engine/rpc_client.py`.
+
+Detalle completo del protocolo en `docs/guitarix-integracion.md` y lista de métodos en
+`docs/guitarix-rpc-methods.md`.
+
+Guitarix también puede anunciarse en la red local por Avahi/mDNS, lo que permite que la PWA de
+control remoto descubra el equipo sin que el usuario tenga que escribir una IP (Fase 5).
+
 ## Jerarquía de datos
 
 Setlist › Bank (32) › Preset (8) → 256 por setlist. Modos: Preset / Stomp / Scene (igual que Quad Cortex).
@@ -36,7 +51,8 @@ Setlist › Bank (32) › Preset (8) → 256 por setlist. Modos: Preset / Stomp 
 ## Fases de construcción
 
 1. Entorno Linux + Guitarix headless + JACK + interfaz de audio genérica → validar latencia
-2. Python RPC → Guitarix + NAM funcionando → validar sonido
+2. Python RPC → Guitarix + NAM funcionando → validar sonido. Incluye decidir si se integra
+   NAM-rs como motor separado o si alcanza con la carga nativa de `.nam` que ya trae Guitarix
 3. Sistema presets/bancos JSON + soporte MIDI genérico
 4. GUI PyQt6 escenario
 5. FastAPI server + PWA mobile control remoto
