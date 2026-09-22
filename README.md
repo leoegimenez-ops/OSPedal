@@ -27,6 +27,7 @@ Cualquier interfaz de audio y cualquier controlador/pedal MIDI **class-compliant
 - [`docs/midi.md`](docs/midi.md) — parseo MIDI, mapeo de acciones y MIDI learn
 - [`docs/mockups.md`](docs/mockups.md) — mockups de interfaz (link al artifact interactivo)
 - [`docs/investigacion-neural-dsp.md`](docs/investigacion-neural-dsp.md) — investigación de Cortex Control (Neural DSP)
+- [`docs/capturas-neuronales.md`](docs/capturas-neuronales.md) — formatos .nam/.aidax/.wav, qué se puede y no se puede usar
 
 ## Estructura del repositorio
 

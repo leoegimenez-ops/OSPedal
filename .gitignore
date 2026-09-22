@@ -1,7 +1,9 @@
-# Modelos NAM/IR (pesan mucho, no van al repo)
+# Modelos NAM/AIDA-X/IR (pesan mucho, no van al repo)
 models/nam/*
+models/aidax/*
 models/irs/*
 !models/nam/.gitkeep
+!models/aidax/.gitkeep
 !models/irs/.gitkeep
 
 # Python

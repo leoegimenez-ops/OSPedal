@@ -253,6 +253,25 @@ class GuitarixRPC:
     def orden_rack(self) -> Any:
         return self.llamar("get_rack_unit_order")
 
+    def archivos(self, categoria: str) -> Any:
+        """Lista archivos disponibles para cargar en una unidad: modelos NAM/AIDA-X
+        para el amp, o impulse responses para la cabina. `categoria` es lo que
+        Guitarix espera en `get_file_list` (p. ej. "nam", "ir"); no está
+        verificado contra un Guitarix real, ver docs/capturas-neuronales.md.
+        """
+        return self.llamar("get_file_list", categoria)
+
+    def recargar_impulse_responses(self) -> None:
+        """Vuelve a escanear el directorio de IRs sin reiniciar el motor.
+
+        Guitarix no re-escanea solo cuando se copian archivos nuevos mientras
+        corre; hay que pedírselo después de que el usuario agregue modelos.
+        """
+        self.notificar("reload_impresp_list")
+
+    def directorios_impulse_response(self) -> Any:
+        return self.llamar("load_impresp_dirs")
+
     def mapa_midi(self) -> Any:
         return self.llamar("get_midi_controller_map")
 
