@@ -12,11 +12,34 @@ Artifact interactivo (Play para navegar, los controles funcionan de verdad):
 | Modo Scene | Escenas del preset con el diff de parámetros que cada una aplica |
 | Afinador | Pantalla completa, aguja de cents, las 6 cuerdas |
 | Dispositivos | Selección de interfaz de audio y controlador MIDI, sin drivers |
-| **Editor de Cadena** | Cómo se arma un preset: cadena de bloques + editor de parámetros |
+| **Editor de Nodos** | Sistema de nodos con splitter/mixer + Buscador de Sonido |
 | **Explorador de Presets** | Navegador Setlist › Banco › Preset |
 
 Las últimas dos surgieron de investigar Cortex Control (Neural DSP) — ver
 `docs/investigacion-neural-dsp.md` para el detalle de esa investigación y qué se adoptó.
+
+## Editor de Nodos
+
+Reemplaza la primera versión de una sola fila por un **sistema de nodos real**, como The Grid de
+Cortex Control: dos filas conectadas por nodos **S** (splitter, divide la señal) y **M** (mixer,
+la vuelve a juntar). Fila principal: TS → COMP → AMP → CAB. Loop paralelo (tiempo/espacio): EQ →
+CHORUS → ECHO → FREEVERB. La geometría de los conectores está calculada a mano (no aproximada)
+para que las líneas lleguen exactas al centro de cada nodo.
+
+Cada bloque, al seleccionarlo, muestra sus parámetros con:
+
+- **Steppers `−` / `+`** junto a cada perilla (mismo patrón que el BPM de Cortex Control).
+- **Botón de aleatorizar** (dados) por bloque: mueve sus parámetros con un jitter de hasta ±20%
+  para explorar variaciones sin perder el carácter general — pensado para "buscar mejores
+  sonidos" tocando, no solo mirando números.
+- **Bypass** funcional.
+
+**Buscador de Sonido** (panel derecho, no existe en Cortex Control — es propio de PedalSistema):
+cinco estilos de partida (Blues, Rock, Metal, Clean, Ambient), cada uno con su propio set de
+valores para los 8 bloques y qué unidades bypassear. Un botón "Sorprendeme" elige uno al azar.
+Al aplicar un estilo, tres barras (Drive / Espacio / Brillo) resumen su carácter. La idea:
+en vez de partir de cero perilla por perilla, el músico arranca de un punto ya tocable y ajusta
+desde ahí.
 
 ## Identidad visual
 
