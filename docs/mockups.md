@@ -71,8 +71,8 @@ con paleta propia:
 
 | Categoría | Color | Unidades de ejemplo |
 |---|---|---|
-| Overdrive | `#FFA724` (ámbar) | tubescreamer |
-| Dinámica | `#8B93A8` (gris azulado) | comp |
+| Overdrive | `#FFA724` (ámbar) | ts9sim |
+| Dinámica | `#8B93A8` (gris azulado) | compressor |
 | Amplificador | `#FF6B5C` (rojo cálido) | amp |
 | Gabinete | `#B98CFF` (violeta) | cab |
 | Ecualizador | `#5AA9FF` (azul) | eq |
@@ -90,8 +90,11 @@ que la app y cualquier documentación usen los mismos valores.
   (splitter/mixer, como el propio Cortex Control) — el mockup no cubre ese caso todavía.
   `engine/rpc_client.py` ya puede leer `get_rack_unit_order`, así que el dato está disponible
   cuando se decida el diseño de rutas paralelas.
-- Los ids de parámetro que aparecen en el Editor (`tubescreamer.drive`, `echo.feedback`, etc.)
-  son plausibles pero no están verificados contra el motor real — a diferencia de
-  `amp.stage1.gain` y `<unidad>.on_off`, que sí están confirmados en
-  `docs/guitarix-integracion.md`. Falta correr `parameterlist` contra un Guitarix real para
-  confirmar los nombres exactos de cada unidad.
+- **Corregido (22/09/2026):** el mockup del Editor todavía usa los ids `tubescreamer.*` y
+  `comp.*` en algunos rótulos — verificado contra un Guitarix real corriendo que la unidad
+  correcta es `ts9sim` (no `tubescreamer`; los nombres de parámetro `.drive`/`.level`/`.tone` sí
+  eran correctos) y `compressor` (no `comp`; `.threshold`/`.ratio`/`.attack` también correctos).
+  Falta reflejar esto en `Editor.dc.html` — está solo en el mockup HTML publicado, no en ningún
+  archivo de este repo. El resto de ids citados (`echo.feedback`, `amp.stage1.gain`,
+  `<unidad>.on_off`) ya están confirmados contra el motor real en `docs/guitarix-integracion.md`
+  y `docs/guitarix-rpc-methods.md`.
