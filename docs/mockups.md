@@ -90,11 +90,15 @@ que la app y cualquier documentación usen los mismos valores.
   (splitter/mixer, como el propio Cortex Control) — el mockup no cubre ese caso todavía.
   `engine/rpc_client.py` ya puede leer `get_rack_unit_order`, así que el dato está disponible
   cuando se decida el diseño de rutas paralelas.
-- **Corregido (22/09/2026):** el mockup del Editor todavía usa los ids `tubescreamer.*` y
-  `comp.*` en algunos rótulos — verificado contra un Guitarix real corriendo que la unidad
-  correcta es `ts9sim` (no `tubescreamer`; los nombres de parámetro `.drive`/`.level`/`.tone` sí
-  eran correctos) y `compressor` (no `comp`; `.threshold`/`.ratio`/`.attack` también correctos).
-  Falta reflejar esto en `Editor.dc.html` — está solo en el mockup HTML publicado, no en ningún
-  archivo de este repo. El resto de ids citados (`echo.feedback`, `amp.stage1.gain`,
-  `<unidad>.on_off`) ya están confirmados contra el motor real en `docs/guitarix-integracion.md`
+- **Corregido (22/09/2026, aplicado 23/09/2026):** el mockup usaba los ids `tubescreamer.*` en
+  algunos rótulos — verificado contra un Guitarix real corriendo que la unidad correcta es
+  `ts9sim` (los nombres de parámetro `.drive`/`.level`/`.tone` ya eran correctos, solo el id de
+  unidad estaba mal). Corregido en `Editor.dc.html` (los tres knobs del bloque overdrive) y en
+  `Stomp.dc.html` (la etiqueta del pedal y el mapeo interno a `<unidad>.on_off`). Vive en el
+  scratchpad de la sesión, no en este repo — falta publicarlo (requiere aprobar el permiso desde
+  la PC, ver conversación del 23/09/2026). `compressor` ya estaba bien en todos los mockups; la
+  mención anterior de un `comp.*` incorrecto era imprecisa, no había ningún parámetro con ese
+  prefijo, solo un id de categoría interno (`comp`) sin relación con nombres de parámetro RPC.
+  El resto de ids citados (`echo.feedback`, `amp.stage1.gain`, `<unidad>.on_off`) ya están
+  confirmados contra el motor real en `docs/guitarix-integracion.md`
   y `docs/guitarix-rpc-methods.md`.
