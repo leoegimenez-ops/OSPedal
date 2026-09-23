@@ -28,6 +28,7 @@ RESULTADOS = {
 }
 
 recibidos = []          # todo lo que llego al servidor
+rack_orden = ["ampstack"]   # estado del rack, mutado por insert_rack_unit/remove_rack_unit
 PUERTO = 17000
 
 
@@ -70,11 +71,21 @@ def servidor(listo, parar):
                     ev = {"jsonrpc": "2.0", "method": "preset_changed",
                           "params": ["Rock", "Crunch"]}
                     conn.sendall(json.dumps(ev).encode() + b"\n")
+                elif metodo == "insert_rack_unit":
+                    unidad = params[0]
+                    if unidad not in rack_orden:
+                        rack_orden.append(unidad)
+                elif metodo == "remove_rack_unit":
+                    unidad = params[0]
+                    if unidad in rack_orden:
+                        rack_orden.remove(unidad)
                 continue
 
             if metodo == "metodo_inexistente":
                 resp = {"jsonrpc": "2.0", "id": str(msg["id"]),
                         "error": {"code": -32601, "message": "Method not found"}}
+            elif metodo == "get_rack_unit_order":
+                resp = {"jsonrpc": "2.0", "id": str(msg["id"]), "result": list(rack_orden)}
             else:
                 # Guitarix real siempre devuelve el id como string, aunque
                 # se lo mande como numero -- verificado con socket crudo.
@@ -152,6 +163,23 @@ def main():
         check("evento encolado",
               any(e.get("method") == "preset_changed" for e in pendientes),
               f"-> {len(pendientes)} pendiente(s)")
+
+        print("\n8. cargar_nam() deja el modelo sonando, no solo cargado")
+        # Verificado contra un motor real (23/09/2026): loadpath/flist solos no alcanzan, hace
+        # falta ademas insertar la unidad en la cadena del rack. Este mock reproduce ese estado
+        # (rack_orden) para que el test agarre una regresion si cargar_nam() deja de hacerlo.
+        gx.cargar_nam("/una/carpeta", ranura="nam")
+        time.sleep(0.1)
+        check("nam quedo en la cadena del rack", "nam" in rack_orden, f"-> {rack_orden}")
+        ultimo_on_off = [c for c in recibidos
+                          if c.get("method") == "set" and c.get("params") and c["params"][0] == "nam.on_off"]
+        check("prende nam.on_off", ultimo_on_off and ultimo_on_off[-1]["params"] == ["nam.on_off", 1],
+              f"-> {ultimo_on_off}")
+
+        print("\n9. cargar_nam() es idempotente: no duplica la unidad en el rack")
+        gx.cargar_nam("/una/carpeta", ranura="nam")
+        time.sleep(0.1)
+        check("sigue habiendo una sola 'nam'", rack_orden.count("nam") == 1, f"-> {rack_orden}")
 
     parar.set()
     print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))

@@ -99,6 +99,33 @@ Verificado con un servidor simulado: la secuencia manda `<ranura>.loadpath` y de
 `<ranura>.flist`, ambos como notificaciones (sin esperar respuesta), con los nombres de parámetro
 exactos del código fuente.
 
+### `loadpath`/`flist` no alcanzan por sí solos — corregido y verificado en vivo (23/09/2026)
+
+Esta sección reemplaza la advertencia anterior de "verificado solo con un servidor simulado".
+Contra un Guitarix 0.47.0 real: cargar un modelo con `loadpath`/`flist` lo pone en memoria (se
+confirmó por el salto de RAM del proceso, +70MB al cargar un WaveNet de 400KB) pero **no lo hace
+sonar** — la unidad además tiene que estar insertada en la cadena del rack, algo que no estaba
+documentado en ningún lado antes de esta verificación.
+
+El mecanismo real (confirmado leyendo `jsonrpc.cpp` del motor, no documentado en
+`docs/guitarix-rpc-methods.md`): `insert_rack_unit(unidad: str, antes_de: str, estéreo: int)`, y
+es una **notificación** (`has_result: false`) — mandarla con `id`, como si fuera una llamada con
+resultado, hace que el motor devuelva un `"result":` mal formado que rompe el parseo JSON del
+lado del cliente (un bug real del motor, no del cliente). `gx.cargar_nam()`/`gx.cargar_rtneural()`
+ya quedaron corregidos en `engine/rpc_client.py` para insertar la unidad (si no está) y prender
+`<ranura>.on_off` — antes dejaban el modelo cargado pero mudo. Verificado extremo a extremo:
+`get_rack_unit_order(0)` pasa de `['ampstack']` a `['ampstack', 'nam']`, y llamar `cargar_nam()`
+dos veces no duplica la entrada.
+
+**Lo que esto NO resuelve:** si la inferencia realmente corre con costo de CPU medible. Con el
+modelo insertado y `on_off=1`, medido con precisión (ticks de CPU de `/proc/<pid>/stat` sobre una
+ventana de 8 segundos, no `top`), la diferencia fue de **apenas ~1% a ~1.1%** — essentially ruido.
+Dos lecturas posibles, y no puedo distinguir cuál es la correcta de forma remota: (a) el WaveNet
+"standard" de NAM es genuinamente barato en un Ryzen moderno con AVX2, o (b) el backend `dummy` de
+JACK bajo WSL2 no reproduce fielmente el costo real de mantener el timing de audio en tiempo real
+(no hay hardware real, ni scheduling de tiempo real — WSL2 rechazó `RR/5`: "Cannot use real-time
+scheduling"). Sigue pendiente confirmarlo con audio real.
+
 ### Lo que sigue sin verificar
 
 Las **impulse responses de cabina (`.wav`)** usan un subsistema distinto (`load_impresp_dirs`,

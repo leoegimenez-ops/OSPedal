@@ -316,8 +316,26 @@ class GuitarixRPC:
     # que queremos (o un symlink a él) y usamos `flist=1` siempre — determinista,
     # sin depender de leer de vuelta la lista que arma Guitarix.
 
+    def _insertar_en_rack_si_falta(self, unidad: str) -> None:
+        """Inserta `unidad` en la cadena mono (0) del rack si todavía no está ahí.
+
+        Verificado contra un Guitarix 0.47.0 real (23/09/2026): cargar un modelo con
+        `loadpath`/`flist` NO alcanza para que se escuche — la unidad tiene que estar además en
+        la cadena del rack (`get_rack_unit_order`), algo que no estaba documentado antes de esta
+        verificación. `insert_rack_unit` es una **notificación** (`has_result: false`), no una
+        llamada con resultado: mandarla con `id` (como si fuera `llamar()`) hace que el motor
+        devuelva un `"result":` mal formado que rompe el parseo JSON del lado del cliente — hay
+        que usar `notificar()`. Firma real, confirmada leyendo `jsonrpc.cpp` en el código fuente
+        del motor (no estaba en `docs/guitarix-rpc-methods.md`): `(unidad: str, antes_de: str,
+        estéreo: int)`. `antes_de=""` inserta al final de la cadena; `estéreo=0` es la cadena
+        mono, la que usan NAM/RTNeural (señal de guitarra).
+        """
+        orden = self.llamar("get_rack_unit_order", 0)
+        if unidad not in orden:
+            self.notificar("insert_rack_unit", unidad, "", 0)
+
     def cargar_nam(self, carpeta: str, indice: int = 1, ranura: str = "nam") -> None:
-        """Carga un modelo .nam. `carpeta` es una ruta absoluta que Guitarix
+        """Carga un modelo .nam y lo deja sonando. `carpeta` es una ruta absoluta que Guitarix
         va a escanear buscando archivos *.nam; `indice` es la posición dentro
         de esa carpeta (1 = primer archivo encontrado). Si la carpeta tiene
         un solo *.nam, `indice=1` siempre apunta a ese archivo sin ambigüedad.
@@ -325,12 +343,16 @@ class GuitarixRPC:
         """
         self.fijar(f"{ranura}.loadpath", carpeta)
         self.fijar(f"{ranura}.flist", indice)
+        self._insertar_en_rack_si_falta(ranura)
+        self.fijar(f"{ranura}.on_off", 1)
 
     def cargar_rtneural(self, carpeta: str, indice: int = 1, ranura: str = "rtneural") -> None:
         """Como `cargar_nam` pero para modelos .json/.aidax de RTNeural.
         `ranura`: "rtneural", "srtneural" o "mrtneural" (modo A/B)."""
         self.fijar(f"{ranura}.loadpath", carpeta)
         self.fijar(f"{ranura}.flist", indice)
+        self._insertar_en_rack_si_falta(ranura)
+        self.fijar(f"{ranura}.on_off", 1)
 
     def mapa_midi(self) -> Any:
         return self.llamar("get_midi_controller_map")
