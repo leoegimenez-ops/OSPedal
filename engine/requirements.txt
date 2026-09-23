@@ -1,0 +1,5 @@
+# Solo engine/mixer.py necesita esto -- el resto de engine/ es stdlib puro.
+# Instalar en el venv del proyecto (.venv/), no en el Python de sistema
+# (Debian bloquea pip install fuera de un venv, PEP 668).
+JACK-Client==0.5.6
+numpy==2.5.3

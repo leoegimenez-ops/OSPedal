@@ -21,6 +21,13 @@ Hallazgo de esta verificación que corrige la doc previa: `banks` **no** devuelv
 nombres — devuelve objetos `{"name", "mutable", "type", "presets"}`, con los presets de cada
 banco ya incluidos ahí mismo (ver `docs/guitarix-rpc-methods.md`).
 
+`/mezclador/*` expone `engine/mixer.py` (ver ese módulo y `docs/mezclas-en-vivo.md`): la matriz de
+ganancia fuente×bus que arma las mezclas de monitor independientes. Variables de entorno
+`MIXER_FUENTES`/`MIXER_BUSES` (listas separadas por coma) — default: cuatro líneas de instrumento
+(`guitarra1,guitarra2,bajo,voz`) y cinco buses (`monitor1,monitor2,monitor3,monitor4,pa`). El
+mezclador es un cliente JACK real (necesita jackd corriendo) — a diferencia de `_motor()`, si no
+hay servidor JACK esto da 503 recién en el primer uso, no al arrancar la API.
+
 `/eventos` corre `GuitarixRPC.eventos()` (generador sincrónico, bloqueante sobre un socket) en un
 hilo aparte con `asyncio.to_thread`, y en paralelo escucha la desconexión del cliente con
 `ws.receive()` — así que cerrar el cliente corta el loop enseguida, no hace falta esperar al
@@ -42,13 +49,32 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
+from engine.mixer import ErrorDeMezclador, MezcladorJack
 from engine.rpc_client import GuitarixError, GuitarixRPC
 
 HOST_GUITARIX = os.environ.get("GX_HOST", "127.0.0.1")
 PUERTO_GUITARIX = int(os.environ.get("GX_PORT", "7000"))
 _TIMEOUT_EVENTOS = 5.0
 
+FUENTES_MIXER = [f.strip() for f in os.environ.get(
+    "MIXER_FUENTES", "guitarra1,guitarra2,bajo,voz").split(",") if f.strip()]
+BUSES_MIXER = [b.strip() for b in os.environ.get(
+    "MIXER_BUSES", "monitor1,monitor2,monitor3,monitor4,pa").split(",") if b.strip()]
+
 _gx: GuitarixRPC | None = None
+_mezclador: MezcladorJack | None = None
+
+
+def _mixer() -> MezcladorJack:
+    global _mezclador
+    if _mezclador is None:
+        try:
+            m = MezcladorJack(FUENTES_MIXER, BUSES_MIXER)
+            m.iniciar()
+        except ErrorDeMezclador as exc:
+            raise HTTPException(503, f"No se pudo iniciar el mezclador: {exc}")
+        _mezclador = m
+    return _mezclador
 
 
 def _motor() -> GuitarixRPC:
@@ -70,6 +96,8 @@ async def lifespan(_app: FastAPI):
     yield
     if _gx is not None:
         _gx.cerrar()
+    if _mezclador is not None:
+        _mezclador.detener()
 
 
 app = FastAPI(title="PedalSistema", lifespan=lifespan)
@@ -82,6 +110,12 @@ class CambiarPreset(BaseModel):
 
 class FijarParametros(BaseModel):
     pares: dict[str, Any]
+
+
+class FijarGanancia(BaseModel):
+    fuente: str
+    bus: str
+    valor: float
 
 
 @app.get("/salud")
@@ -151,6 +185,23 @@ def fijar_parametros(datos: FijarParametros) -> dict:
     try:
         gx.fijar(*pares)
     except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.get("/mezclador/matriz")
+def matriz_mezclador() -> dict:
+    """Ganancia fuente×bus actual, más las fuentes/buses disponibles."""
+    m = _mixer()
+    return {"fuentes": m.fuentes, "buses": m.buses, "matriz": m.matriz()}
+
+
+@app.post("/mezclador/ganancia")
+def fijar_ganancia_mezclador(datos: FijarGanancia) -> dict:
+    m = _mixer()
+    try:
+        m.fijar_ganancia(datos.fuente, datos.bus, datos.valor)
+    except ErrorDeMezclador as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}
 

@@ -90,13 +90,46 @@ class GXFalso:
             time.sleep(0.02)
 
 
+class MixerFalso:
+    """Reemplaza a MezcladorJack -- sin tocar JACK para nada."""
+
+    instancias: list["MixerFalso"] = []
+
+    def __init__(self, fuentes, buses, nombre_cliente="pedalsistema_mixer", ganancia_inicial=1.0):
+        self.fuentes = list(fuentes)
+        self.buses = list(buses)
+        self.ganancias = {f: {b: ganancia_inicial for b in buses} for f in fuentes}
+        self.falla_iniciar = False
+        MixerFalso.instancias.append(self)
+
+    def iniciar(self):
+        if self.falla_iniciar:
+            raise api.ErrorDeMezclador("jackd no está corriendo (simulado)")
+
+    def detener(self):
+        pass
+
+    def fijar_ganancia(self, fuente, bus, valor):
+        if fuente not in self.ganancias:
+            raise api.ErrorDeMezclador(f"fuente desconocida: {fuente!r}. Válidas: {self.fuentes}")
+        if bus not in self.buses:
+            raise api.ErrorDeMezclador(f"bus desconocido: {bus!r}. Válidos: {self.buses}")
+        self.ganancias[fuente][bus] = float(valor)
+
+    def matriz(self):
+        return {f: dict(self.ganancias[f]) for f in self.fuentes}
+
+
 def reset():
-    """Vuelve api._gx a None para que el próximo endpoint REST cree una GXFalso nueva."""
+    """Vuelve api._gx/_mezclador a None para que el próximo endpoint cree fakes nuevas."""
     GXFalso.instancias.clear()
     api._gx = None
+    MixerFalso.instancias.clear()
+    api._mezclador = None
 
 
 api.GuitarixRPC = GXFalso
+api.MezcladorJack = MixerFalso
 client = TestClient(api.app)
 
 
@@ -181,6 +214,41 @@ with client.websocket_connect("/eventos") as ws:
     check("recibe los dos eventos en orden", recibidos == eventos_canned, f"-> {recibidos}")
     check("se suscribe a todo", fake_ws.suscripciones == ["all"], f"-> {fake_ws.suscripciones}")
 check("se puede cerrar sin colgarse", True)  # si el proceso llega hasta aca, no se colgo
+
+print("\n10. /mezclador/matriz y /mezclador/ganancia")
+reset()
+r = client.get("/mezclador/matriz")
+check("200", r.status_code == 200, f"-> {r.status_code} {r.text}")
+cuerpo = r.json()
+check("usa las fuentes/buses configurados", cuerpo["fuentes"] == api.FUENTES_MIXER and
+      cuerpo["buses"] == api.BUSES_MIXER, f"-> {cuerpo['fuentes']} / {cuerpo['buses']}")
+check("ganancia inicial 1.0 para todos", all(
+    v == 1.0 for fila in cuerpo["matriz"].values() for v in fila.values()), f"-> {cuerpo['matriz']}")
+
+r = client.post("/mezclador/ganancia", json={"fuente": api.FUENTES_MIXER[0],
+                                              "bus": api.BUSES_MIXER[-1], "valor": 0.3})
+check("200", r.status_code == 200 and r.json() == {"ok": True})
+check("se aplica en la instancia", MixerFalso.instancias[0].ganancias[api.FUENTES_MIXER[0]][api.BUSES_MIXER[-1]] == 0.3,
+      f"-> {MixerFalso.instancias[0].ganancias}")
+
+r = client.post("/mezclador/ganancia", json={"fuente": "no_existe", "bus": api.BUSES_MIXER[0], "valor": 1.0})
+check("400 fuente desconocida", r.status_code == 400, f"-> {r.status_code} {r.text}")
+
+print("\n11. Mezclador sin JACK disponible -> 503")
+reset()
+
+
+class MixerQueFalla(MixerFalso):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.falla_iniciar = True
+
+
+api.MezcladorJack = MixerQueFalla
+r = client.get("/mezclador/matriz")
+check("503", r.status_code == 503, f"-> {r.status_code} {r.text}")
+api.MezcladorJack = MixerFalso
+api._mezclador = None
 
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)
