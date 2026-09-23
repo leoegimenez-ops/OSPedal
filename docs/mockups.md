@@ -14,6 +14,11 @@ Artifact interactivo (Play para navegar, los controles funcionan de verdad):
 | Dispositivos | Selección de interfaz de audio y controlador MIDI, sin drivers |
 | **Editor de Nodos** | Sistema de nodos con splitter/mixer + Buscador de Sonido |
 | **Explorador de Presets** | Navegador Setlist › Banco › Preset |
+| **Tempo** | Tabs Global/Scene/Preset, tap tempo funcional, slider |
+| **Global EQ** | 5 bandas paramétricas sobre eje logarítmico |
+| **Gig View** | Editor de asignación de pedalera A–H (distinto de Modo Stomp) |
+| **Capturar Equipo** | Flujo para entrenar un `.nam` de tu equipo físico con NAM |
+| **MIDI Out** | Mensajes MIDI salientes por pedal y pedal de expresión |
 
 Las últimas dos surgieron de investigar Cortex Control (Neural DSP) — ver
 `docs/investigacion-neural-dsp.md` para el detalle de esa investigación y qué se adoptó.
