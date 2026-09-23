@@ -53,7 +53,7 @@ Mapea directo sobre la jerarquía Setlist › Bank › Preset del proyecto.
 
 | Método | Resultado | Uso |
 |---|---|---|
-| `banks` | Sí | Lista de bancos |
+| `banks` | Sí | Lista de bancos. **Forma real confirmada contra el motor (23/09/2026)**: no es una lista de nombres — es una lista de objetos `{"name", "mutable", "type", "presets"}`, con `presets` ya como lista de nombres de preset incluida ahí mismo (no hace falta un `presets(banco)` aparte si ya se tiene el resultado de `banks`). Ver `server/api.py`. |
 | `setpreset` | No | Cambia el preset activo. Llamada crítica del pedal |
 | `create_default_scratch_preset` | No | Crea preset temporal por defecto |
 | `sendcc` | No | Envía un control change |

@@ -1,0 +1,6 @@
+fastapi==0.141.1
+uvicorn==0.53.0
+
+# Solo para correr server/test_api.py, no en producción:
+httpx2==2.13.1
+websockets==17.1
