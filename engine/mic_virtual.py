@@ -26,10 +26,16 @@ hechos físicos documentados y citados en `docs/mic-virtual.md`:
 usuario ya tiene LEVEL para eso. Acá DISTANCIA solo cambia el carácter
 tonal (menos graves de proximidad, un poco más de sala), nunca el volumen.
 
+El EQ real de Guitarix (`queryunit` contra un motor 0.47.0 corriendo,
+22/09/2026) es de 4 bandas *peak* fijas — sin shelfs. `aplicar()` usa la
+banda 1 (ya pensada como "Sub" en la UI del motor) para el boost de graves
+y aproxima el oscurecimiento por posición como un recorte en la banda 4,
+en vez de barrer una frecuencia de corte como haría un low-pass real.
+
 Esto es un punto de partida matemáticamente razonable, **no un resultado
 afinado por oído**. Los valores están pensados para ser plausibles, no para
-sonar "correctos" — eso solo se puede juzgar escuchando contra una captura
-real, y todavía no hay un Guitarix corriendo para hacer esa prueba.
+sonar "correctos" — eso todavía no se probó escuchando audio real, solo se
+confirmó que los parámetros existen y aceptan estos valores.
 """
 
 from __future__ import annotations
@@ -49,6 +55,16 @@ _TOPE_REVERB_SUGERIDO = 0.15
 # Frecuencia fija del shelf de graves del proximity effect. Los mics reales
 # muestran el boost sobre todo por debajo de 100-150Hz.
 _FREQ_SHELF_GRAVES = 150
+
+# El EQ real de Guitarix (verificado con queryunit contra un motor real,
+# 22/09/2026) no tiene shelfs: son 4 bandas peak fijas (eq.peakN/levelN/
+# bandwidthN). Sin low-pass no hay forma de mover un "punto de corte" de
+# agudos — en cambio se aproxima el oscurecimiento como un recorte (dB
+# negativos) en una banda de agudos fija. 6kHz es una frecuencia de
+# "presencia" razonable, cerca del rango por defecto de la banda 4
+# (eq.peak4 = 3520Hz de fábrica).
+_FREQ_PEAK_AGUDOS = 6000
+_TOPE_CORTE_AGUDOS_DB = 10.0
 
 
 @dataclass(frozen=True)
@@ -99,12 +115,17 @@ def calcular(posicion: float, distancia: float, tipo: str = "dinamico") -> dict:
     pasabajos_hz = mic.brillo_base_hz + (mic.oscurecimiento_hz - mic.brillo_base_hz) * posicion
     graves_shelf_db = mic.proximidad_db_max * math.exp(-distancia / _TAU_PROXIMIDAD)
     reverb_wet_sugerido = _TOPE_REVERB_SUGERIDO * distancia
+    # posicion ya es la fracción 0..1 de oscurecimiento (pasabajos_hz es lineal
+    # en posicion), así que sirve directo para escalar el recorte de agudos.
+    corte_agudos_db = -_TOPE_CORTE_AGUDOS_DB * posicion
 
     return {
         "tipo_mic": mic.nombre,
         "pasabajos_hz": round(pasabajos_hz),
         "graves_shelf_hz": _FREQ_SHELF_GRAVES,
         "graves_shelf_db": round(graves_shelf_db, 1),
+        "corte_agudos_hz": _FREQ_PEAK_AGUDOS,
+        "corte_agudos_db": round(corte_agudos_db, 1),
         "reverb_wet_sugerido": round(reverb_wet_sugerido, 3),
     }
 
@@ -112,18 +133,25 @@ def calcular(posicion: float, distancia: float, tipo: str = "dinamico") -> dict:
 def aplicar(rpc, posicion: float, distancia: float, tipo: str = "dinamico", unidad_eq: str = "eq") -> dict:
     """Empuja el modelo calculado al bloque EQ del motor, vía RPC.
 
-    ADVERTENCIA — sin verificar: los ids `<unidad>.band1.*` / `<unidad>.band3.*`
-    son una suposición (Cortex Control mostraba "Parametric-3", lo que sugiere
-    3 bandas disponibles; no es evidencia de que Guitarix nombre sus bandas
-    igual). Además puede hacer falta fijar el *tipo* de cada banda (shelf vs.
-    peak) con un parámetro aparte antes de que freq/gain tengan efecto — no
-    confirmado. Sirve para probar la lógica de conexión, no para dar por
-    buena la asignación de parámetros hasta correrlo contra un Guitarix real.
+    Parámetros verificados con `queryunit` contra un Guitarix 0.47.0 real
+    corriendo (22/09/2026, WSL2 + Debian 13): el EQ del motor es de 4 bandas
+    peak fijas, `<unidad>.peakN` (frecuencia, Hz) / `<unidad>.levelN`
+    (ganancia, dB) / `<unidad>.bandwidthN` (ancho), sin ningún tipo shelf —
+    la suposición anterior (`band1.freq`, `band3.freq`, con bandas shelf)
+    era incorrecta y quedó corregida acá.
+
+    Se usa la banda 1 (`level1` es "Sub" en la UI del motor, ya pensada para
+    graves) para el boost de proximidad, y la banda 4 (la más aguda de las
+    cuatro) para aproximar el oscurecimiento por posición como un recorte
+    en dB — no hay low-pass real que mover, así que el "corte de agudos" se
+    aproxima recortando una banda fija en vez de barrer una frecuencia de
+    corte. Ver `corte_agudos_db`/`corte_agudos_hz` en `calcular()`.
     """
     datos = calcular(posicion, distancia, tipo)
     rpc.fijar(
-        f"{unidad_eq}.band1.freq", datos["graves_shelf_hz"],
-        f"{unidad_eq}.band1.gain", datos["graves_shelf_db"],
-        f"{unidad_eq}.band3.freq", datos["pasabajos_hz"],
+        f"{unidad_eq}.peak1", datos["graves_shelf_hz"],
+        f"{unidad_eq}.level1", datos["graves_shelf_db"],
+        f"{unidad_eq}.peak4", datos["corte_agudos_hz"],
+        f"{unidad_eq}.level4", datos["corte_agudos_db"],
     )
     return datos

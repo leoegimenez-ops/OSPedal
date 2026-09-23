@@ -96,23 +96,50 @@ orden que documenta la física real (verificado con tests, no solo declarado):
 | Dinámico (cardioide) | 10 dB | 9 kHz |
 | Condensador (omni) | 3 dB (casi nulo) | 12 kHz (el más brillante) |
 
+## El EQ real de Guitarix (verificado contra el motor, 22/09/2026)
+
+WSL2 + Debian 13 ya permite compilar y correr Guitarix de verdad (ver `docs/guitarix-integracion.md`).
+Con el motor corriendo, `queryunit eq` mostró la estructura real — y corrigió una suposición:
+
+**Es de 4 bandas *peak* fijas, sin ningún tipo shelf.** Los parámetros reales son
+`eq.peakN` (frecuencia, 20–22000 Hz), `eq.levelN` (ganancia, −50 a 50 dB) y `eq.bandwidthN`
+(ancho), para N de 1 a 4. La banda 1 se llama "Sub" en la propia interfaz del motor — ya pensada
+para graves — lo que la hace perfecta para el boost de proximidad.
+
+`aplicar()` quedó corregido: usa `peak1`/`level1` para el boost de graves (ganancia directa en dB,
+sin conversión) y aproxima el oscurecimiento por posición como un **recorte en la banda 4**
+(`corte_agudos_db`, hasta −10dB) en vez de barrer una frecuencia de corte — no hay low-pass real
+que mover con un EQ solo-peak.
+
+**Verificado de punta a punta contra el motor real:**
+
+```python
+aplicar(gx, posicion=0.7, distancia=0.1, tipo="cinta")
+# -> {'graves_shelf_hz': 150, 'graves_shelf_db': 10.7, 'corte_agudos_hz': 6000, 'corte_agudos_db': -7.0, ...}
+
+gx.obtener('eq.peak1', 'eq.level1', 'eq.peak4', 'eq.level4')
+# -> {'eq.peak1': 150, 'eq.level1': 10.7, 'eq.peak4': 6000, 'eq.level4': -7}
+```
+
+Coincide exacto: lo que calcula `calcular()` es lo que Guitarix confirma tener puesto.
+
 ## Qué está verificado y qué no
 
-**Verificado con 18 tests** (`test_mic_virtual.py`): la función es monótona (moverse hacia el
+**Verificado con 22 tests** (`test_mic_virtual.py`): la función es monótona (moverse hacia el
 borde siempre oscurece, nunca al revés; alejarse siempre reduce el proximity effect, nunca lo
 aumenta), los límites son exactos en los extremos, el orden entre tipos de mic respeta la física
-citada arriba, y los valores fuera de rango se recortan sin romper.
+citada arriba, los valores fuera de rango se recortan sin romper, y `aplicar()` manda los
+parámetros reales del motor (`eq.peak1/level1/peak4/level4`).
 
-**No verificado, y no se puede verificar todavía:**
+**Verificado además contra un Guitarix real corriendo** (no solo un mock): los parámetros
+existen con esos nombres, aceptan estos valores, y se pueden leer de vuelta idénticos.
 
-- **Que suene bien.** Esto es matemática internamente consistente, no un resultado afinado por
-  oído. Eso solo se puede juzgar escuchando contra una captura real, con un Guitarix corriendo —
-  bloqueado hoy por el BIOS.
-- **Los nombres de parámetro del lado de Guitarix.** `aplicar()` manda a `eq.band1.*` y
-  `eq.band3.*`, asumiendo que el bloque EQ tiene al menos 3 bandas disponibles (inferido de que
-  Cortex Control mostraba "Parametric-3" en su investigación, que **no** es evidencia de cómo
-  nombra Guitarix las suyas). También es probable que haga falta fijar el *tipo* de cada banda
-  (shelf vs. peak) con un parámetro aparte antes de que freq/gain tengan efecto — no confirmado.
+**Lo único que sigue sin poder verificarse:**
+
+- **Que suene bien.** Esto es matemática internamente consistente y aplicada correctamente al
+  motor, no un resultado afinado por oído. Eso requiere escuchar audio real saliendo de una
+  interfaz real — WSL2 no tiene hardware de audio, así que esta prueba específica sigue esperando
+  el hardware físico.
 
 ## Camino a futuro: morphing de múltiples IRs
 

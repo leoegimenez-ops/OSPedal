@@ -6,12 +6,17 @@ headless:
     guitarix -N -p 7000
 
 El protocolo está documentado en `docs/guitarix-integracion.md` y la lista completa de métodos
-en `docs/guitarix-rpc-methods.md`. Dos particularidades del servidor que condicionan este
-cliente:
+en `docs/guitarix-rpc-methods.md`. Particularidades del servidor que condicionan este cliente,
+las tres primeras confirmadas leyendo el código fuente del motor y la última contra un Guitarix
+real corriendo (22/09/2026, ver docs/guitarix-integracion.md):
 
 1. Los mensajes van delimitados por salto de línea, no por longitud ni framing HTTP.
 2. Los parámetros deben ser posicionales (array JSON). Pasarlos por nombre devuelve el error
    -32000 "by-name parameters not implemented".
+3. El `id` de la respuesta viene como **string** aunque se lo mande como número (se pide `id: 1`,
+   responde `"id": "1"`). `llamar()` compara con `str()` en ambos lados por esto.
+4. `getversion` no devuelve un string simple: devuelve un array `[major, minor, "version_completa"]`,
+   por ejemplo `[1, 1, "0.47.0"]`.
 """
 
 from __future__ import annotations
@@ -140,7 +145,14 @@ class GuitarixRPC:
         while True:
             mensaje = self._leer_linea()
             id_mensaje = mensaje.get("id")
-            if id_mensaje == id_peticion:
+            # Guitarix devuelve el id como string aunque se lo mandemos como
+            # número (verificado con un socket crudo contra el motor real:
+            # pedís id=1, responde "id":"1"). Comparar sin convertir nunca
+            # hace match y el cliente termina esperando hasta el timeout del
+            # socket. Nuestro servidor simulado no reproducía este detalle
+            # -- hacía eco del id tal cual se lo mandaban -- así que los
+            # tests no lo agarraron; ver test_rpc_client.py.
+            if str(id_mensaje) == str(id_peticion):
                 if "error" in mensaje:
                     error = mensaje["error"]
                     raise GuitarixError(error.get("code", 0), error.get("message", ""))
