@@ -9,7 +9,7 @@ Decisión: el sistema **no** apunta a modelos específicos de interfaz de audio 
 - **Configuración:** el propio sistema expone una pantalla (GUI PyQt6, módulo `gui/`) donde el usuario ve los dispositivos de audio y MIDI detectados y elige cuál usar. Esta selección se guarda como configuración del sistema (no hardcodeada).
 
 Implicancia para `engine/`:
-- `audio_engine.py` debe enumerar dispositivos ALSA/JACK disponibles en vez de asumir un dispositivo fijo.
+- `audio_engine.py` debe enumerar dispositivos ALSA/JACK disponibles en vez de asumir un dispositivo fijo. **Hecho (23/09/2026)**: enumera tarjetas ALSA (`aplay -l`/`arecord -l`) y puertos JACK (`jack_lsp -pt`, incluye frecuencia de muestreo y tamaño de buffer). La parte de JACK está verificada contra un `jackd` real corriendo con Guitarix conectado; la de ALSA usa el formato documentado de `alsa-utils` pero todavía no se probó contra una tarjeta física — WSL2 no tiene forma de exponer una. Ver el docstring del módulo.
 - `midi_engine.py` debe enumerar puertos MIDI disponibles (ALSA seq) y permitir mapeo de mensajes MIDI (CC/PC/Note) configurable por el usuario, no atado a un pedal específico.
 
 El mapeo MIDI no hace falta implementarlo desde cero: Guitarix expone un modo de aprendizaje
