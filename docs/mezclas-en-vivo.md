@@ -23,17 +23,20 @@ modelo existente de `presets/` sin cambios.
 JACK por sí solo resuelve el *ruteo* (conectar la salida de una instancia de Guitarix a donde
 haga falta) pero no ofrece ganancia por conexión — conectar dos fuentes al mismo puerto las suma a
 volumen unidad, sin forma de balancear. Hacía falta un cliente JACK propio con una matriz de
-ganancia fuente×bus. Eso es `MezcladorJack`.
+ganancia+paneo fuente×bus. Eso es `MezcladorJack`.
 
 ```python
 from engine.mixer import MezcladorJack
 
 with MezcladorJack(["guitarra1", "guitarra2", "bajo", "voz"],
-                    ["monitor1", "monitor2", "monitor3", "monitor4", "pa"]) as m:
-    m.conectar_entrada("guitarra1", "gx_head_amp:out_0")   # instancia real de Guitarix
-    m.conectar_salida("pa", "system:playback_1")            # salida física
-    m.fijar_ganancia("bajo", "monitor1", 0.6)                # el monitor del guitarrista 1
-                                                              # quiere menos bajo
+                    ["monitor1", "monitor2", "monitor3", "monitor4", "pa"],
+                    modo_buses={"pa": "estereo"}) as m:     # el resto queda mono (default)
+    m.conectar_entrada("guitarra1", "gx_head_amp:out_0")     # instancia real de Guitarix
+    m.conectar_salida("pa", "system:playback_1", canal="L")  # bus estéreo: hace falta canal
+    m.conectar_salida("pa", "system:playback_2", canal="R")
+    m.conectar_salida("monitor1", "system:playback_3")       # bus mono: un solo puerto
+    m.fijar_ganancia("bajo", "monitor1", 0.6)   # el monitor del guitarrista 1 quiere menos bajo
+    m.fijar_paneo("guitarra1", "pa", -0.4)      # guitarra 1 un poco a la izquierda en el PA
 ```
 
 Verificado en vivo, extremo a extremo, contra un `jackd` real (23/09/2026):
@@ -44,30 +47,53 @@ Verificado en vivo, extremo a extremo, contra un `jackd` real (23/09/2026):
 - Conectado a la instancia real de Guitarix (`gx_head_amp:out_0`) — confirma que el ruteo funciona
   contra el motor real, no solo contra un cliente de prueba.
 - Cambiar una ganancia en caliente (sin reconectar puertos) se refleja en el siguiente buffer.
+- Un bus estéreo con una fuente paneada hard-left entrega la señal completa por `_L` y silencio
+  por `_R`; el mismo paneo en un bus mono no da lugar espacial (obvio, es mono) pero sí resta
+  presencia en el fold-down — confirmado con puertos JACK reales, no solo en la función pura.
+
+### Estéreo real con salida mono: la pieza que pidió el usuario
+
+Cada bus se procesa **siempre** como una mezcla estéreo interna (ganancia + paneo por fuente); lo
+que cambia por bus es si esa mezcla estéreo sale por dos puertos físicos (`modo="estereo"`) o se
+convierte a un solo puerto mono (`modo="mono"`, el default) sumando L+R. Así un bus mono conserva
+"la sensación del paneo" — una fuente panceada al extremo pierde presencia en el mono también,
+tal como en una consola real — sin necesitar dos cadenas de mezcla separadas.
+
+La ley de paneo (`ganancias_pan()`) fue elegida a propósito **para que no tocar el paneo sea
+matemáticamente idéntico a no tener paneo**: en el centro (default) da ganancia completa en los
+dos canales, no la atenuación de -3dB que usan las consolas con "potencia constante". Se sacrifica
+un matiz de precisión en estéreo puro (el centro suena levemente más fuerte que los extremos) a
+cambio de que `fijar_ganancia()` siga siendo 100% predecible para quien nunca usa paneo — decisión
+explicada en detalle en el docstring de `engine/mixer.py`.
 
 ### Lo que se simplificó a propósito
 
-- **Buses mono, no estéreo.** Encaja con "todos con in-ear/wedge mono" — es la config más simple
-  y la más común para monitores de banda. Un bus estéreo es extender `MezcladorJack` para
-  registrar 2 puertos por bus en vez de 1; no hace falta rediseñar nada si hace falta después.
-- **Sin lock en la matriz de ganancia.** Se lee dentro del callback de audio de JACK; se confía en
-  que la asignación de un `float` a una clave de `dict` es atómica bajo el GIL. Es una
+- **Sin lock en la matriz de ganancia/paneo.** Se lee dentro del callback de audio de JACK; se
+  confía en que la asignación de un `float` a una clave de `dict` es atómica bajo el GIL. Es una
   simplificación consciente, documentada en el docstring del módulo — si en la práctica causa
-  clicks al cambiar ganancia, el siguiente paso es doble buffer con swap atómico.
+  clicks al cambiar ganancia o paneo, el siguiente paso es doble buffer con swap atómico.
 - **La conexión JACK (`conectar_entrada`/`conectar_salida`) es manual**, no hay todavía un mapeo
   automático "guitarra 1 = este puerto físico". Eso es trabajo de GUI/configuración (Fase 4), no
   del mezclador en sí.
+- **Una sola ley de paneo.** Si en la práctica hace falta que el centro suene parejo en estéreo
+  puro (a costa de romper la compatibilidad de `fijar_ganancia()`), la alternativa es una ley de
+  potencia constante configurable por bus — no se construyeron las dos sin un caso real que lo
+  pida.
 
 ## Control remoto: `server/api.py`
 
-`GET /mezclador/matriz` y `POST /mezclador/ganancia` (ver docstring de `server/api.py`) exponen la
-matriz por HTTP — es lo que cada integrante controlaría desde su celular para ajustar su propio
-monitor, reusando el mismo patrón que ya usan `/estado`/`/preset`/`/parametros`. Probado en vivo
-con curl contra un servidor real, y con tests contra un mezclador falso
-(`server/test_api.py`) para que corran sin necesitar JACK.
+`GET /mezclador/matriz`, `POST /mezclador/ganancia` y `POST /mezclador/paneo` (ver docstring de
+`server/api.py`) exponen la matriz por HTTP — es lo que cada integrante controlaría desde su
+celular para ajustar su propio monitor, reusando el mismo patrón que ya usan
+`/estado`/`/preset`/`/parametros`. Probado en vivo con curl contra un servidor real (incluyendo un
+bus `pa` configurado como estéreo, confirmando que aparecen `pa_L`/`pa_R` como puertos JACK
+reales), y con 29 checks contra un mezclador falso (`server/test_api.py`) para que corran sin
+necesitar JACK.
 
 Variables de entorno: `MIXER_FUENTES`, `MIXER_BUSES` (listas separadas por coma) — default 4
-líneas / 5 buses, pero configurable sin tocar código para una formación distinta.
+líneas / 5 buses; `MIXER_MODO_BUSES` (`"bus:modo,bus:modo"`, ej. `"pa:estereo"`) para marcar qué
+buses son estéreo — todo lo que no se liste queda mono. Configurable sin tocar código para una
+formación distinta.
 
 ## Lo que queda abierto (ver también `docs/capturas-neuronales.md` y la conversación completa)
 

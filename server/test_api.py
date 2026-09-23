@@ -95,10 +95,14 @@ class MixerFalso:
 
     instancias: list["MixerFalso"] = []
 
-    def __init__(self, fuentes, buses, nombre_cliente="pedalsistema_mixer", ganancia_inicial=1.0):
+    def __init__(self, fuentes, buses, nombre_cliente="pedalsistema_mixer", ganancia_inicial=1.0,
+                 modo_buses=None):
         self.fuentes = list(fuentes)
         self.buses = list(buses)
+        modo_buses = modo_buses or {}
+        self.modo_bus = {b: modo_buses.get(b, "mono") for b in buses}
         self.ganancias = {f: {b: ganancia_inicial for b in buses} for f in fuentes}
+        self.paneos = {f: {b: 0.0 for b in buses} for f in fuentes}
         self.falla_iniciar = False
         MixerFalso.instancias.append(self)
 
@@ -109,15 +113,24 @@ class MixerFalso:
     def detener(self):
         pass
 
-    def fijar_ganancia(self, fuente, bus, valor):
+    def _validar(self, fuente, bus):
         if fuente not in self.ganancias:
             raise api.ErrorDeMezclador(f"fuente desconocida: {fuente!r}. Válidas: {self.fuentes}")
         if bus not in self.buses:
             raise api.ErrorDeMezclador(f"bus desconocido: {bus!r}. Válidos: {self.buses}")
+
+    def fijar_ganancia(self, fuente, bus, valor):
+        self._validar(fuente, bus)
         self.ganancias[fuente][bus] = float(valor)
 
+    def fijar_paneo(self, fuente, bus, valor):
+        self._validar(fuente, bus)
+        self.paneos[fuente][bus] = max(-1.0, min(1.0, float(valor)))
+
     def matriz(self):
-        return {f: dict(self.ganancias[f]) for f in self.fuentes}
+        return {f: {b: {"ganancia": self.ganancias[f][b], "paneo": self.paneos[f][b]}
+                    for b in self.buses}
+                for f in self.fuentes}
 
 
 def reset():
@@ -222,8 +235,11 @@ check("200", r.status_code == 200, f"-> {r.status_code} {r.text}")
 cuerpo = r.json()
 check("usa las fuentes/buses configurados", cuerpo["fuentes"] == api.FUENTES_MIXER and
       cuerpo["buses"] == api.BUSES_MIXER, f"-> {cuerpo['fuentes']} / {cuerpo['buses']}")
-check("ganancia inicial 1.0 para todos", all(
-    v == 1.0 for fila in cuerpo["matriz"].values() for v in fila.values()), f"-> {cuerpo['matriz']}")
+check("todos los buses mono por default", all(m == "mono" for m in cuerpo["modo_bus"].values()),
+      f"-> {cuerpo['modo_bus']}")
+check("ganancia 1.0 y paneo 0.0 por default para todos", all(
+    celda == {"ganancia": 1.0, "paneo": 0.0}
+    for fila in cuerpo["matriz"].values() for celda in fila.values()), f"-> {cuerpo['matriz']}")
 
 r = client.post("/mezclador/ganancia", json={"fuente": api.FUENTES_MIXER[0],
                                               "bus": api.BUSES_MIXER[-1], "valor": 0.3})
@@ -234,7 +250,25 @@ check("se aplica en la instancia", MixerFalso.instancias[0].ganancias[api.FUENTE
 r = client.post("/mezclador/ganancia", json={"fuente": "no_existe", "bus": api.BUSES_MIXER[0], "valor": 1.0})
 check("400 fuente desconocida", r.status_code == 400, f"-> {r.status_code} {r.text}")
 
-print("\n11. Mezclador sin JACK disponible -> 503")
+print("\n11. /mezclador/paneo")
+reset()
+r = client.post("/mezclador/paneo", json={"fuente": api.FUENTES_MIXER[0],
+                                           "bus": api.BUSES_MIXER[0], "valor": -0.7})
+check("200", r.status_code == 200 and r.json() == {"ok": True})
+check("se aplica en la instancia",
+      MixerFalso.instancias[0].paneos[api.FUENTES_MIXER[0]][api.BUSES_MIXER[0]] == -0.7,
+      f"-> {MixerFalso.instancias[0].paneos}")
+
+r = client.post("/mezclador/paneo", json={"fuente": api.FUENTES_MIXER[0],
+                                           "bus": api.BUSES_MIXER[0], "valor": 5.0})
+check("se recorta a 1.0 fuera de rango",
+      MixerFalso.instancias[0].paneos[api.FUENTES_MIXER[0]][api.BUSES_MIXER[0]] == 1.0,
+      f"-> {MixerFalso.instancias[0].paneos}")
+
+r = client.post("/mezclador/paneo", json={"fuente": "no_existe", "bus": api.BUSES_MIXER[0], "valor": 0.0})
+check("400 fuente desconocida", r.status_code == 400, f"-> {r.status_code} {r.text}")
+
+print("\n12. Mezclador sin JACK disponible -> 503")
 reset()
 
 
