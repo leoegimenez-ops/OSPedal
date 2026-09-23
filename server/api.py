@@ -130,6 +130,15 @@ class FijarPaneo(BaseModel):
     valor: float
 
 
+# Deliberadamente NO se usa `Field(allow_inf_nan=False)` acá para rechazar NaN/Infinity a nivel
+# Pydantic. Se probó (23/09/2026) y causa un 500 en vez de un 422: cuando Pydantic rechaza el
+# valor, Starlette arma la respuesta de error incluyendo el valor original que llegó, y el
+# `json.dumps` estándar de Python no puede codificar un NaN/Infinity crudo (aunque sí los acepta
+# al decodificar -- asimetría real de la librería). El rechazo real pasa un nivel más adentro:
+# `MezcladorJack.fijar_ganancia()`/`fijar_paneo()` cortan los valores no finitos y devuelven un
+# mensaje de texto (no el float crudo), así que ese 400 sí se serializa bien. Ver `engine/mixer.py`.
+
+
 @app.get("/salud")
 def salud() -> dict:
     """No toca Guitarix — solo confirma que el proceso de la API está vivo."""

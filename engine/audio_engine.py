@@ -144,6 +144,19 @@ def parsear_jack_lsp(texto: str) -> list[PuertoJack]:
     return puertos
 
 
+def _ejecutar(args: list[str], timeout: float = 5) -> subprocess.CompletedProcess | None:
+    """Corre un binario externo, devolviendo None si no existe o se cuelga.
+
+    No chequea el código de salida -- cada llamador decide qué hacer con eso, porque no
+    significa lo mismo en todos los casos (`aplay -l` sin tarjetas da rc=0 con salida vacía,
+    no un error; los binarios de JACK sí usan rc!=0 para "no hay servidor").
+    """
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
 def dispositivos_alsa(tipo: str = "reproduccion") -> list[DispositivoALSA]:
     """Enumera tarjetas ALSA vía `aplay -l` (reproducción) o `arecord -l` (captura).
 
@@ -154,61 +167,36 @@ def dispositivos_alsa(tipo: str = "reproduccion") -> list[DispositivoALSA]:
     if tipo not in TIPOS_DISPOSITIVO:
         raise ValueError(f"tipo debe ser uno de {sorted(TIPOS_DISPOSITIVO)}, no {tipo!r}")
     comando = "aplay" if tipo == "reproduccion" else "arecord"
-    try:
-        resultado = subprocess.run(
-            [comando, "-l"], capture_output=True, text=True, timeout=5
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return []
-    return parsear_aplay(resultado.stdout)
+    resultado = _ejecutar([comando, "-l"])
+    return parsear_aplay(resultado.stdout) if resultado is not None else []
 
 
 def puertos_jack() -> list[PuertoJack]:
     """Enumera los puertos del servidor JACK activo. Lista vacía si no hay servidor corriendo."""
-    try:
-        resultado = subprocess.run(
-            ["jack_lsp", "-pt"], capture_output=True, text=True, timeout=5
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return []
-    if resultado.returncode != 0:
+    resultado = _ejecutar(["jack_lsp", "-pt"])
+    if resultado is None or resultado.returncode != 0:
         return []
     return parsear_jack_lsp(resultado.stdout)
 
 
 def jack_activo() -> bool:
     """True si hay un servidor JACK corriendo y respondiendo."""
-    try:
-        resultado = subprocess.run(
-            ["jack_samplerate"], capture_output=True, text=True, timeout=3
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return resultado.returncode == 0
+    resultado = _ejecutar(["jack_samplerate"], timeout=3)
+    return resultado is not None and resultado.returncode == 0
 
 
 def frecuencia_muestreo_jack() -> int | None:
     """Frecuencia de muestreo del servidor JACK activo, o None si no hay servidor."""
-    try:
-        resultado = subprocess.run(
-            ["jack_samplerate"], capture_output=True, text=True, timeout=3
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if resultado.returncode != 0:
+    resultado = _ejecutar(["jack_samplerate"], timeout=3)
+    if resultado is None or resultado.returncode != 0:
         return None
     return int(resultado.stdout.strip())
 
 
 def tamano_buffer_jack() -> int | None:
     """Tamaño de buffer (en frames) del servidor JACK activo, o None si no hay servidor."""
-    try:
-        resultado = subprocess.run(
-            ["jack_bufsize"], capture_output=True, text=True, timeout=3
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if resultado.returncode != 0:
+    resultado = _ejecutar(["jack_bufsize"], timeout=3)
+    if resultado is None or resultado.returncode != 0:
         return None
     return int(resultado.stdout.strip())
 

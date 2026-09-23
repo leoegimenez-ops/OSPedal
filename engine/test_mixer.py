@@ -19,6 +19,14 @@ import numpy as np
 
 from engine.mixer import ErrorDeMezclador, ganancias_pan, mezclar, mezclar_estereo, mono_desde_estereo
 
+try:
+    import jack as _jack
+    _jack.Client("sonda_disponibilidad").close()
+    hay_jack = True
+except Exception as _e:
+    hay_jack = False
+    print(f"(sin servidor JACK disponible, se saltean las pruebas en vivo: {_e})")
+
 fallos = []
 
 
@@ -94,15 +102,30 @@ try:
 except ErrorDeMezclador as e:
     check("fuentes repetidas", "repetid" in str(e), f"-> {e}")
 
-print("\n11. MezcladorJack en vivo: contra un jackd real")
+print("\n10b. MezcladorJack: NaN/Infinity rechazados, no llegan a corromper la mezcla")
 try:
-    import jack as _jack
-    _jack.Client("sonda_disponibilidad").close()
-    hay_jack = True
-except Exception as e:
-    hay_jack = False
-    print(f"  (sin servidor JACK disponible, se saltea: {e})")
+    MezcladorJack(["g1"], ["pa"], ganancia_inicial=float("nan"))
+    check("ganancia_inicial NaN rechazada", False)
+except ErrorDeMezclador as e:
+    check("ganancia_inicial NaN rechazada", "finito" in str(e), f"-> {e}")
 
+if hay_jack:
+    with MezcladorJack(["g1"], ["pa"], nombre_cliente="test_mixer_nan") as m:
+        for valor in (float("nan"), float("inf"), float("-inf")):
+            try:
+                m.fijar_ganancia("g1", "pa", valor)
+                check(f"fijar_ganancia rechaza {valor}", False)
+            except ErrorDeMezclador as e:
+                check(f"fijar_ganancia rechaza {valor}", "finito" in str(e), f"-> {e}")
+            try:
+                m.fijar_paneo("g1", "pa", valor)
+                check(f"fijar_paneo rechaza {valor}", False)
+            except ErrorDeMezclador as e:
+                check(f"fijar_paneo rechaza {valor}", "finito" in str(e), f"-> {e}")
+        check("la ganancia sigue en su valor original (no se corrompio)",
+              m.ganancias["g1"]["pa"] == 1.0, f"-> {m.ganancias}")
+
+print("\n11. MezcladorJack en vivo: contra un jackd real")
 if hay_jack:
     import jack
 

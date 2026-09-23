@@ -64,6 +64,8 @@ esto demuestra no alcanzar en la práctica.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 try:
@@ -164,6 +166,8 @@ class MezcladorJack:
                 raise ErrorDeMezclador(
                     f"modo desconocido para {b!r}: {modo!r}. Válidos: {sorted(MODOS_BUS)}"
                 )
+        if not math.isfinite(ganancia_inicial):
+            raise ErrorDeMezclador(f"ganancia_inicial debe ser un número finito, no {ganancia_inicial!r}")
 
         self.fuentes = list(fuentes)
         self.buses = list(buses)
@@ -228,12 +232,23 @@ class MezcladorJack:
 
     def fijar_ganancia(self, fuente: str, bus: str, valor: float) -> None:
         self._validar_fuente_bus(fuente, bus)
-        self.ganancias[fuente][bus] = float(valor)
+        valor = float(valor)
+        if not math.isfinite(valor):
+            # NaN/Infinity pasan sin quejarse por json.loads() y por Pydantic (verificado:
+            # ninguno de los dos rechaza estos valores por default) y de ahí llegarían
+            # directo al callback de audio -- una vez que un NaN entra a la mezcla, se
+            # propaga a todo lo que toca y deja ese canal mudo o roto sin ningún error
+            # visible. Cortarlo acá es la única barrera real.
+            raise ErrorDeMezclador(f"ganancia debe ser un número finito, no {valor!r}")
+        self.ganancias[fuente][bus] = valor
 
     def fijar_paneo(self, fuente: str, bus: str, valor: float) -> None:
         """`valor`: -1 (izquierda) .. 0 (centro) .. 1 (derecha). Fuera de rango se recorta."""
         self._validar_fuente_bus(fuente, bus)
-        self.paneos[fuente][bus] = max(-1.0, min(1.0, float(valor)))
+        valor = float(valor)
+        if not math.isfinite(valor):
+            raise ErrorDeMezclador(f"paneo debe ser un número finito, no {valor!r}")
+        self.paneos[fuente][bus] = max(-1.0, min(1.0, valor))
 
     def matriz(self) -> dict[str, dict[str, dict[str, float]]]:
         return {

@@ -88,9 +88,16 @@ class ControladorEscenario:
     def cargar_indice(self, indice: int) -> Preset:
         return self.cargar(indice // PRESETS_POR_BANCO, indice % PRESETS_POR_BANCO)
 
-    def _aplicar(self, preset: Preset) -> None:
-        """Empuja el preset al motor: preset base y un único `set` con todo lo demás."""
-        if preset.guitarix_banco and preset.guitarix_preset:
+    def _aplicar(self, preset: Preset, incluir_base: bool = True) -> None:
+        """Empuja el preset al motor: preset base (opcional) y un único `set` con todo lo demás.
+
+        `incluir_base=False` es para cambio de escena: el preset base ya está cargado en el
+        motor, así que reenviar `setpreset` sería un recargado completo innecesario -- y
+        potencialmente un corte de audio -- para lo que tiene que ser un ajuste liviano de
+        parámetros. Confirmado en vivo que sin este parámetro, `_cambiar_escena()` reenviaba
+        `setpreset` en cada pisada de escena (ver `engine/test_integracion.py`).
+        """
+        if incluir_base and preset.guitarix_banco and preset.guitarix_preset:
             self.rpc.set_preset(preset.guitarix_banco, preset.guitarix_preset)
         pares = preset.pares_rpc(self.escena_activa)
         # Los stomps pisados en runtime ganan sobre lo que dice el preset.
@@ -212,7 +219,7 @@ class ControladorEscenario:
         if not 0 <= indice < len(escenas):
             return f"Sin escena {indice + 1}"
         self.escena_activa = escenas[indice].nombre
-        self._aplicar(self.preset)
+        self._aplicar(self.preset, incluir_base=False)
         return f"Escena: {self.escena_activa}"
 
     # -- Tap tempo --------------------------------------------------------------------

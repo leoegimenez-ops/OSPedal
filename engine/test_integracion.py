@@ -251,6 +251,11 @@ env = rpc.ultimo_set()
 check("la escena pisa el parametro", env.get("amp.gain") == 0.9, f"-> {env.get('amp.gain')}")
 check("el stomp pisado se respeta", env.get("echo.on_off") == 1, f"-> {env.get('echo.on_off')}")
 check("escena inexistente no rompe", "Sin escena" in ctrl.ejecutar(Accion.ESCENA, 9))
+# Bug encontrado en revision de codigo (23/09/2026): cambiar de escena reenviaba setpreset,
+# un recargado completo del preset base -- innecesario y con riesgo real de corte de audio,
+# para lo que tiene que ser solo un ajuste de parametros. El preset base ya esta cargado.
+check("NO reenvia setpreset al cambiar de escena (el preset base ya esta cargado)",
+      not any(c[0] == "setpreset" for c in rpc.llamadas), f"-> {rpc.llamadas}")
 
 print("\n20. Controlador: cambiar de preset reinicia los stomps")
 ctrl.cargar(0, 0)
