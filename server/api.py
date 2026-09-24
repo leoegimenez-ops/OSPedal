@@ -23,6 +23,13 @@ banco ya incluidos ahí mismo (ver `docs/guitarix-rpc-methods.md`).
 
 `/app/` sirve la PWA de control remoto (`mobile/`) desde esta misma app, vía `StaticFiles`.
 
+`/lineas/*` conecta `engine/controlador.py` (`ControladorEscenario`) a la API -- hasta acá
+`/preset`/`/parametros` solo hablaban con el Guitarix crudo, sin pasar por nuestra propia setlist
+(bancos/presets/escenas/stomps/tempo). Una línea = una instancia de Guitarix (su propio puerto) +
+su propia setlist, configurable con `LINEAS` (default: reusa `MIXER_FUENTES` con puertos
+secuenciales desde `GX_PORT` y la setlist de ejemplo del repo). `GET /lineas/{linea}/estado` y
+`POST /lineas/{linea}/accion` (con el valor de texto de cualquier `Accion` del enum).
+
 `/mezclador/*` expone `engine/mixer.py` (ver ese módulo y `docs/mezclas-en-vivo.md`): la matriz de
 ganancia+paneo fuente×bus que arma las mezclas de monitor independientes, cada bus mono o
 estéreo según se configure. Variables de entorno `MIXER_FUENTES`/`MIXER_BUSES` (listas separadas
@@ -55,8 +62,11 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from engine.controlador import ControladorEscenario
+from engine.midi_engine import Accion
 from engine.mixer import ErrorDeMezclador, MezcladorJack
 from engine.rpc_client import GuitarixError, GuitarixRPC
+from presets.preset_manager import ErrorDeSetlist, Setlist
 
 HOST_GUITARIX = os.environ.get("GX_HOST", "127.0.0.1")
 PUERTO_GUITARIX = int(os.environ.get("GX_PORT", "7000"))
@@ -71,8 +81,60 @@ MODO_BUSES_MIXER = dict(
     par.split(":", 1) for par in os.environ.get("MIXER_MODO_BUSES", "").split(",") if ":" in par
 )
 
+_RUTA_SETLIST_DEFECTO = Path(__file__).resolve().parent.parent / "presets" / "ejemplo-setlist.json"
+
+
+def _config_lineas() -> dict[str, dict[str, Any]]:
+    """Una línea de instrumento = una instancia de Guitarix (su propio puerto) + su propia
+    setlist. `LINEAS`: `"nombre:puerto:ruta_setlist,..."` (puerto y ruta opcionales). Sin la
+    variable, reusa `FUENTES_MIXER` con puertos secuenciales desde `GX_PORT` y la setlist de
+    ejemplo del repo -- pensado para poder probar el endpoint ya mismo, no como setlist real de
+    ninguna banda."""
+    crudo = os.environ.get("LINEAS")
+    config: dict[str, dict[str, Any]] = {}
+    if crudo:
+        for parte in crudo.split(","):
+            if not parte.strip():
+                continue
+            campos = parte.split(":")
+            nombre = campos[0].strip()
+            puerto = int(campos[1]) if len(campos) > 1 and campos[1].strip() else PUERTO_GUITARIX
+            ruta = Path(campos[2]) if len(campos) > 2 and campos[2].strip() else _RUTA_SETLIST_DEFECTO
+            config[nombre] = {"puerto": puerto, "setlist": ruta}
+    else:
+        for i, nombre in enumerate(FUENTES_MIXER):
+            config[nombre] = {"puerto": PUERTO_GUITARIX + i, "setlist": _RUTA_SETLIST_DEFECTO}
+    return config
+
+
+LINEAS = _config_lineas()
+
 _gx: GuitarixRPC | None = None
 _mezclador: MezcladorJack | None = None
+_controladores: dict[str, ControladorEscenario] = {}
+
+
+def _linea(nombre: str) -> ControladorEscenario:
+    """`ControladorEscenario` de una línea, conectando y cargando su setlist recién en el
+    primer uso -- misma idea que `_motor()`/`_mixer()`."""
+    if nombre not in LINEAS:
+        raise HTTPException(404, f"línea desconocida: {nombre!r}. Válidas: {list(LINEAS)}")
+    if nombre not in _controladores:
+        cfg = LINEAS[nombre]
+        gx = GuitarixRPC(HOST_GUITARIX, cfg["puerto"])
+        try:
+            gx.conectar()
+        except OSError as exc:
+            raise HTTPException(
+                503, f"No se pudo conectar la línea {nombre!r} en el puerto {cfg['puerto']}: {exc}"
+            )
+        try:
+            setlist = Setlist.cargar(cfg["setlist"])
+        except ErrorDeSetlist as exc:
+            gx.cerrar()
+            raise HTTPException(500, f"Setlist inválida para la línea {nombre!r}: {exc}")
+        _controladores[nombre] = ControladorEscenario(setlist, gx)
+    return _controladores[nombre]
 
 
 def _mixer() -> MezcladorJack:
@@ -108,6 +170,8 @@ async def lifespan(_app: FastAPI):
         _gx.cerrar()
     if _mezclador is not None:
         _mezclador.detener()
+    for ctrl in _controladores.values():
+        ctrl.rpc.cerrar()
 
 
 app = FastAPI(title="PedalSistema", lifespan=lifespan)
@@ -250,6 +314,64 @@ def fijar_paneo_mezclador(datos: FijarPaneo) -> dict:
     except ErrorDeMezclador as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}
+
+
+class EjecutarAccion(BaseModel):
+    accion: str
+    parametro: int | None = None
+
+
+def _estado_linea(ctrl: ControladorEscenario) -> dict:
+    preset = ctrl.preset
+    return {
+        "preset": preset.nombre,
+        "indice_activo": ctrl.indice_activo,
+        "banco_activo": ctrl.banco_activo,
+        "banco_visible": ctrl.banco_visible,
+        "posicion_activa": ctrl.posicion_activa,
+        "modo": ctrl.modo.value,
+        "escena_activa": ctrl.escena_activa,
+        "tempo_bpm": ctrl.tempo_bpm,
+        "stomps": [
+            {"etiqueta": s.etiqueta, "unidad": s.unidad, "activo": ctrl.stomp_activo(i)}
+            for i, s in enumerate(preset.stomps)
+        ],
+        "escenas": [e.nombre for e in preset.escenas],
+    }
+
+
+@app.get("/lineas")
+def listar_lineas() -> list[str]:
+    """Nombres de línea configurados (`LINEAS`, o por default los mismos que `MIXER_FUENTES`)."""
+    return list(LINEAS)
+
+
+@app.get("/lineas/{linea}/estado")
+def estado_linea(linea: str) -> dict:
+    """Preset activo, banco visible, modo, escena, tempo y estado de cada stomp -- la parte de
+    control de performance que `/preset`/`/parametros` (Guitarix crudo) no cubren."""
+    return _estado_linea(_linea(linea))
+
+
+@app.post("/lineas/{linea}/accion")
+def ejecutar_accion(linea: str, datos: EjecutarAccion) -> dict:
+    """Dispara cualquier `Accion` de `engine/controlador.py` sobre una línea: cambiar de preset,
+    navegar bancos, pisar un stomp, cambiar de escena, tocar el afinador, tap tempo, etc.
+    `accion` es el valor de texto del enum (`"toggle_stomp"`, `"escena"`, ...); `parametro` es lo
+    que esa acción necesite (número de stomp, índice de escena/preset) o `null` si no necesita.
+    """
+    ctrl = _linea(linea)
+    try:
+        accion = Accion(datos.accion)
+    except ValueError:
+        raise HTTPException(
+            400, f"acción desconocida: {datos.accion!r}. Válidas: {[a.value for a in Accion]}"
+        )
+    try:
+        mensaje = ctrl.ejecutar(accion, datos.parametro)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"mensaje": mensaje, **_estado_linea(ctrl)}
 
 
 def _proximo_evento(gx: GuitarixRPC) -> dict | None:

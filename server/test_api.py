@@ -134,11 +134,13 @@ class MixerFalso:
 
 
 def reset():
-    """Vuelve api._gx/_mezclador a None para que el próximo endpoint cree fakes nuevas."""
+    """Vuelve api._gx/_mezclador/_controladores a None para que el próximo endpoint cree fakes
+    nuevas."""
     GXFalso.instancias.clear()
     api._gx = None
     MixerFalso.instancias.clear()
     api._mezclador = None
+    api._controladores.clear()
 
 
 api.GuitarixRPC = GXFalso
@@ -295,6 +297,46 @@ r = client.get("/app/app.js")
 check("app.js 200", r.status_code == 200, f"-> {r.status_code}")
 r = client.get("/app/manifest.json")
 check("manifest.json 200 y valido", r.status_code == 200 and r.json().get("name"), f"-> {r.status_code}")
+
+print("\n14. GET /lineas y /lineas/{linea}/estado")
+reset()
+r = client.get("/lineas")
+check("devuelve los nombres configurados", r.json() == api.FUENTES_MIXER, f"-> {r.json()}")
+
+r = client.get("/lineas/guitarra1/estado")
+check("200", r.status_code == 200, f"-> {r.status_code} {r.text}")
+cuerpo = r.json()
+check("trae preset/modo/stomps/escenas de la setlist de ejemplo real",
+      cuerpo["preset"] == "Clean Verso" and cuerpo["modo"] == "preset"
+      and len(cuerpo["stomps"]) == 2 and cuerpo["escenas"] == ["Estrofa", "Estribillo"],
+      f"-> {cuerpo}")
+
+r = client.get("/lineas/no_existe/estado")
+check("404 linea desconocida", r.status_code == 404, f"-> {r.status_code} {r.text}")
+
+print("\n15. POST /lineas/{linea}/accion")
+reset()
+r = client.post("/lineas/guitarra1/accion", json={"accion": "escena", "parametro": 1})
+check("200 y cambia de escena", r.status_code == 200 and r.json()["escena_activa"] == "Estribillo",
+      f"-> {r.status_code} {r.json() if r.status_code == 200 else r.text}")
+
+r = client.get("/lineas/guitarra2/estado")
+check("otra linea queda independiente (sin escena activa)",
+      r.json()["escena_activa"] is None, f"-> {r.json()}")
+
+r = client.post("/lineas/guitarra1/accion", json={"accion": "toggle_stomp", "parametro": 0})
+check("toggle_stomp prende el primer stomp",
+      r.status_code == 200 and r.json()["stomps"][0]["activo"] is True, f"-> {r.text}")
+
+r = client.post("/lineas/guitarra1/accion", json={"accion": "tap_tempo"})
+check("accion sin parametro obligatorio (tap_tempo) no rompe", r.status_code == 200, f"-> {r.text}")
+
+r = client.post("/lineas/guitarra1/accion", json={"accion": "volar"})
+check("400 accion desconocida (no 500)", r.status_code == 400, f"-> {r.status_code} {r.text}")
+
+r = client.post("/lineas/guitarra1/accion", json={"accion": "cambiar_preset"})
+check("400 sin el parametro que la accion necesita (no 500)",
+      r.status_code == 400 and "índice" in r.json()["detail"], f"-> {r.status_code} {r.text}")
 
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)
