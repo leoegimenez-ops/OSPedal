@@ -284,5 +284,17 @@ check("503", r.status_code == 503, f"-> {r.status_code} {r.text}")
 api.MezcladorJack = MixerFalso
 api._mezclador = None
 
+print("\n13. /app/ sirve la PWA de control remoto (mobile/)")
+# Verificado a mano con un navegador real (Playwright) que la app entera funciona -- esto solo
+# es la red de seguridad para que una regresion futura en el montaje no pase desapercibida.
+r = client.get("/app/")
+check("200", r.status_code == 200, f"-> {r.status_code}")
+check("es html", "text/html" in r.headers.get("content-type", ""), f"-> {r.headers}")
+check("es el index de la PWA", "PedalSistema" in r.text, f"-> {r.text[:80]}")
+r = client.get("/app/app.js")
+check("app.js 200", r.status_code == 200, f"-> {r.status_code}")
+r = client.get("/app/manifest.json")
+check("manifest.json 200 y valido", r.status_code == 200 and r.json().get("name"), f"-> {r.status_code}")
+
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

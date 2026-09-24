@@ -21,6 +21,8 @@ Hallazgo de esta verificación que corrige la doc previa: `banks` **no** devuelv
 nombres — devuelve objetos `{"name", "mutable", "type", "presets"}`, con los presets de cada
 banco ya incluidos ahí mismo (ver `docs/guitarix-rpc-methods.md`).
 
+`/app/` sirve la PWA de control remoto (`mobile/`) desde esta misma app, vía `StaticFiles`.
+
 `/mezclador/*` expone `engine/mixer.py` (ver ese módulo y `docs/mezclas-en-vivo.md`): la matriz de
 ganancia+paneo fuente×bus que arma las mezclas de monitor independientes, cada bus mono o
 estéreo según se configure. Variables de entorno `MIXER_FUENTES`/`MIXER_BUSES` (listas separadas
@@ -46,9 +48,11 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from engine.mixer import ErrorDeMezclador, MezcladorJack
@@ -107,6 +111,14 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="PedalSistema", lifespan=lifespan)
+
+# La PWA de control remoto (mobile/) se sirve desde esta misma app, montada bajo /app -- así una
+# ruta relativa como fetch("/estado") funciona igual en local que atrás de un túnel público, sin
+# tener que hardcodear ningún host. El prefijo /app no choca con ninguna ruta de la API (todas
+# son rutas propias tipo /estado, /mezclador/*, nunca bajo /app).
+_DIR_MOBILE = Path(__file__).resolve().parent.parent / "mobile"
+if _DIR_MOBILE.is_dir():
+    app.mount("/app", StaticFiles(directory=_DIR_MOBILE, html=True), name="mobile")
 
 
 class CambiarPreset(BaseModel):

@@ -41,7 +41,8 @@ pedal-sistema/
 ├── presets/  ← preset_manager.py, bank_manager.py, schema JSON
 ├── server/   ← api.py (FastAPI), websocket.py
 ├── gui/      ← main_window.py, stage_view.py, chain_view.py
-├── mobile/   ← index.html, app.js, manifest.json (PWA)
+├── mobile/   ← index.html, app.js, manifest.json (PWA — control de las mezclas de monitor,
+│               servida desde server/api.py en /app/)
 └── models/   ← /nam/ y /irs/ (gitignored, pesan mucho)
 ```
 
