@@ -360,7 +360,9 @@ async function actualizarEstadoMotor() {
       return;
     }
     const datos = await resp.json();
-    marcarEstado(true, `Guitarix ${Array.isArray(datos.version) ? datos.version[2] : datos.version}`);
+    // "Arquitec DSP" es el nombre de marca cara al usuario -- el motor real (Guitarix) se
+    // documenta en docs/guitarix-integracion.md, no en el texto que ve el musico.
+    marcarEstado(true, `Arquitec DSP ${Array.isArray(datos.version) ? datos.version[2] : datos.version}`);
     $txtCpu.textContent = `CPU ${Number(datos.carga_cpu).toFixed(1)}%`;
   } catch (e) {
     marcarEstado(false, "Sin conexión");

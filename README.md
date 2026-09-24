@@ -6,7 +6,7 @@ Sistema operativo Linux dedicado para procesamiento de audio en vivo. Reemplaza 
 
 - **OS:** Debian minimal + Linux kernel 6.12+ (PREEMPT_RT nativo)
 - **Audio server:** PipeWire + JACK2 (latencia 1-3ms)
-- **Motor DSP:** Guitarix fork (C++) controlado via RPC socket
+- **Motor DSP:** Arquitec DSP — fork propio de [Guitarix](https://github.com/brummer10/guitarix) (C++, GPL-3.0), controlado vía RPC socket. Ver "Atribución y licencia" en `docs/guitarix-integracion.md`.
 - **Amp sim:** NAM-rs (Rust, SIMD AVX2+FMA)
 - **Orquestación:** Python 3.11
 - **GUI desktop:** PyQt6 (modo escenario)

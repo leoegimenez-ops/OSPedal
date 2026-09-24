@@ -129,9 +129,13 @@ reduce superficie de fallo y consumo de CPU.
 
 ## Compilación
 
+Desde el 24/09/2026 compilamos desde nuestro propio espejo (`egimenez-bot/arquitec-dsp`), no
+directamente del repo de `brummer10` — mismo código, mismo historial completo, pero sin depender
+de que el repositorio de un tercero siga disponible. Ver "Atribución y licencia" más abajo.
+
 ```bash
-git clone https://github.com/brummer10/guitarix.git
-cd guitarix && git submodule update --init --recursive
+git clone https://github.com/egimenez-bot/arquitec-dsp.git
+cd arquitec-dsp && git submodule update --init --recursive
 cd trunk
 ./waf configure --prefix=/usr --includeresampler --includeconvolver --optimization
 ./waf build && sudo ./waf install
@@ -147,3 +151,32 @@ libfftw3-dev libsndfile1-dev libboost-dev libboost-system-dev libboost-thread-de
 Las dependencias de GTK son necesarias para compilar aunque el binario se use en modo headless.
 Para la ISO mínima conviene evaluar compilar en una etapa de build separada e instalar solo el
 binario y sus librerías de runtime.
+
+## Atribución y licencia
+
+El motor DSP real que corre por debajo de PedalSistema (nombre de marca de cara al usuario:
+**Arquitec DSP** — ver la PWA y `README.md`) es [Guitarix](https://github.com/brummer10/guitarix),
+escrito originalmente por Hermann Meyer, Andreas Degert, James Warden y sus colaboradores.
+Licencia **GPL-3.0**, la misma que este proyecto.
+
+Desde el 24/09/2026 compilamos desde un espejo propio (`egimenez-bot/arquitec-dsp`) en vez de
+clonar el repositorio original en cada build — la GPL-3.0 permite explícitamente copiar,
+modificar y redistribuir el código, siempre que se mantengan los avisos de copyright, el texto
+de la licencia, y no se presente como si fuera un motor escrito de cero por este proyecto. El
+espejo conserva el historial completo (todos los commits, ramas y tags del original) y su
+`COPYING` original sin tocar.
+
+`trunk/src/` además empaqueta otros proyectos de terceros, cada uno con su propia licencia —
+no son código de Guitarix ni de PedalSistema:
+
+| Proyecto | Qué hace acá | Licencia |
+|---|---|---|
+| [zita-convolver](https://kokkinizita.linuxaudio.org/linuxaudio/) / zita-resampler | Convolución de IRs de cabina, resampling | GPL-3.0 (Fons Adriaensen) |
+| [RTNeural](https://github.com/jatinchowdhury18/RTNeural) | Inferencia de modelos `.aidax`/RTNeural | BSD-3-Clause |
+| [NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore) | Inferencia de modelos `.nam` | MIT |
+| Faust (código generado) | DSP de algunas unidades del rack | Depende del módulo Faust original |
+
+Nada de esto cambia el resultado técnico verificado en el resto de esta sesión (protocolo RPC,
+nombres de parámetro, mecanismo de carga de NAM): sigue siendo exactamente el mismo motor, con
+el mismo comportamiento — lo único que cambió es de dónde se clona el código fuente para
+compilarlo.
