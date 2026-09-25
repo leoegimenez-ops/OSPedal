@@ -26,9 +26,14 @@ VERSION_FORMATO = 1
 MAX_BANCOS = 32
 PRESETS_POR_BANCO = 8
 MAX_PRESETS = MAX_BANCOS * PRESETS_POR_BANCO  # 256
+MAX_ESCENAS = 8  # A-H, una por switch de la pedalera -- mismo tope que schema.json
 
 # Valores aceptados como parámetro por el motor (jsonrpc.cpp:1008-1031).
 TIPOS_VALOR = (int, float, bool, str)
+
+# Las dos cadenas del rack de Guitarix, con el flag "estéreo" que espera insert/remove_rack_unit
+# y get_rack_unit_order (0 = mono, 1 = estéreo).
+CADENAS = {"mono": 0, "estereo": 1}
 
 
 class ErrorDeSetlist(ValueError):
@@ -125,10 +130,27 @@ class Preset:
     stomps: list[Stomp] = field(default_factory=list)
     escenas: list[Escena] = field(default_factory=list)
     notas: str = ""
+    # Orden de bloques del rack por cadena ("mono"/"estereo"), tal como lo guarda el botón de
+    # guardar del GRID. Opcional: un preset sin cadena no toca el rack al cargarse (comportamiento
+    # anterior, compatible con setlists viejas).
+    cadena: dict[str, list[str]] | None = None
 
     @classmethod
     def desde_dict(cls, datos: dict[str, Any], ruta: str) -> Preset:
         _exigir(isinstance(datos, dict), ruta, "debe ser un objeto")
+
+        cadena = None
+        if "cadena" in datos:
+            crudo_cadena = datos["cadena"]
+            _exigir(isinstance(crudo_cadena, dict), f"{ruta}.cadena", "debe ser un objeto")
+            cadena = {}
+            for clave, unidades in crudo_cadena.items():
+                _exigir(clave in CADENAS, f"{ruta}.cadena.{clave}",
+                        f"cadena desconocida, válidas: {', '.join(CADENAS)}")
+                _exigir(isinstance(unidades, list)
+                        and all(isinstance(u, str) and u for u in unidades),
+                        f"{ruta}.cadena.{clave}", "debe ser una lista de ids de unidad")
+                cadena[clave] = list(unidades)
 
         banco = preset = None
         if "guitarix" in datos:
@@ -156,6 +178,8 @@ class Preset:
 
         escenas_crudo = datos.get("escenas", [])
         _exigir(isinstance(escenas_crudo, list), f"{ruta}.escenas", "debe ser una lista")
+        _exigir(len(escenas_crudo) <= MAX_ESCENAS, f"{ruta}.escenas",
+                f"máximo {MAX_ESCENAS} escenas (A-H)")
 
         return cls(
             nombre=_texto(datos, "nombre", ruta),
@@ -169,6 +193,7 @@ class Preset:
             escenas=[Escena.desde_dict(e, f"{ruta}.escenas[{i}]")
                      for i, e in enumerate(escenas_crudo)],
             notas=_texto(datos, "notas", ruta, obligatorio=False),
+            cadena=cadena,
         )
 
     def a_dict(self) -> dict[str, Any]:
@@ -187,6 +212,8 @@ class Preset:
             salida["escenas"] = [e.a_dict() for e in self.escenas]
         if self.notas:
             salida["notas"] = self.notas
+        if self.cadena is not None:
+            salida["cadena"] = {k: list(v) for k, v in self.cadena.items()}
         return salida
 
     def escena(self, nombre: str) -> Escena | None:

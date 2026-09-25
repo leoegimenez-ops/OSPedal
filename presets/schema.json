@@ -69,7 +69,16 @@
           "maxItems": 8,
           "items": { "$ref": "#/$defs/escena" }
         },
-        "notas": { "type": "string" }
+        "notas": { "type": "string" },
+        "cadena": {
+          "description": "Orden de bloques del rack por cadena, tal como lo guarda el GRID. Opcional: sin este campo, cargar el preset no toca el rack.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mono": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "estereo": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        }
       }
     },
     "stomp": {

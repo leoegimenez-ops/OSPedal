@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from engine.categorias import CATEGORIAS, categoria, fijos, insertables, nombres
 from engine.controlador import ControladorEscenario
 from engine.midi_engine import Accion
 from engine.mixer import ErrorDeMezclador, MezcladorJack
@@ -82,15 +84,18 @@ MODO_BUSES_MIXER = dict(
     par.split(":", 1) for par in os.environ.get("MIXER_MODO_BUSES", "").split(",") if ":" in par
 )
 
-_RUTA_SETLIST_DEFECTO = Path(__file__).resolve().parent.parent / "presets" / "ejemplo-setlist.json"
+_RUTA_SETLIST_EJEMPLO = Path(__file__).resolve().parent.parent / "presets" / "ejemplo-setlist.json"
+# Setlists de trabajo, una por línea. El botón de guardar del GRID escribe acá -- nunca sobre la
+# setlist de ejemplo del repo. Si la de una línea no existe todavía, se crea copiando el ejemplo.
+DIR_SETLISTS = Path(os.environ.get(
+    "SETLISTS_DIR", Path(__file__).resolve().parent.parent / "presets" / "setlists"))
 
 
 def _config_lineas() -> dict[str, dict[str, Any]]:
     """Una línea de instrumento = una instancia de Guitarix (su propio puerto) + su propia
     setlist. `LINEAS`: `"nombre:puerto:ruta_setlist,..."` (puerto y ruta opcionales). Sin la
-    variable, reusa `FUENTES_MIXER` con puertos secuenciales desde `GX_PORT` y la setlist de
-    ejemplo del repo -- pensado para poder probar el endpoint ya mismo, no como setlist real de
-    ninguna banda."""
+    variable, reusa `FUENTES_MIXER` con puertos secuenciales desde `GX_PORT`, y cada línea usa
+    `SETLISTS_DIR/<nombre>.json` (arranca como copia de la setlist de ejemplo del repo)."""
     crudo = os.environ.get("LINEAS")
     config: dict[str, dict[str, Any]] = {}
     if crudo:
@@ -100,11 +105,12 @@ def _config_lineas() -> dict[str, dict[str, Any]]:
             campos = parte.split(":")
             nombre = campos[0].strip()
             puerto = int(campos[1]) if len(campos) > 1 and campos[1].strip() else PUERTO_GUITARIX
-            ruta = Path(campos[2]) if len(campos) > 2 and campos[2].strip() else _RUTA_SETLIST_DEFECTO
+            ruta = (Path(campos[2]) if len(campos) > 2 and campos[2].strip()
+                    else DIR_SETLISTS / f"{nombre}.json")
             config[nombre] = {"puerto": puerto, "setlist": ruta}
     else:
         for i, nombre in enumerate(FUENTES_MIXER):
-            config[nombre] = {"puerto": PUERTO_GUITARIX + i, "setlist": _RUTA_SETLIST_DEFECTO}
+            config[nombre] = {"puerto": PUERTO_GUITARIX + i, "setlist": DIR_SETLISTS / f"{nombre}.json"}
     return config
 
 
@@ -113,6 +119,7 @@ LINEAS = _config_lineas()
 _gx: GuitarixRPC | None = None
 _mezclador: MezcladorJack | None = None
 _controladores: dict[str, ControladorEscenario] = {}
+_cache_plugins: dict[str, list[dict[str, Any]]] = {}
 
 
 def _linea(nombre: str) -> ControladorEscenario:
@@ -129,13 +136,29 @@ def _linea(nombre: str) -> ControladorEscenario:
             raise HTTPException(
                 503, f"No se pudo conectar la línea {nombre!r} en el puerto {cfg['puerto']}: {exc}"
             )
+        ruta = Path(cfg["setlist"])
+        if not ruta.exists():
+            ruta.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(_RUTA_SETLIST_EJEMPLO, ruta)
         try:
-            setlist = Setlist.cargar(cfg["setlist"])
+            setlist = Setlist.cargar(ruta)
         except ErrorDeSetlist as exc:
             gx.cerrar()
             raise HTTPException(500, f"Setlist inválida para la línea {nombre!r}: {exc}")
         _controladores[nombre] = ControladorEscenario(setlist, gx)
     return _controladores[nombre]
+
+
+def _plugins(nombre: str) -> list[dict[str, Any]]:
+    """`pluginlist` de la línea, cacheado: no cambia mientras el motor corre (son los plugins
+    compilados en esa versión de Guitarix)."""
+    if nombre not in _cache_plugins:
+        _cache_plugins[nombre] = _linea(nombre).rpc.plugins()
+    return _cache_plugins[nombre]
+
+
+def _guardar_setlist(nombre: str) -> None:
+    _linea(nombre).setlist.guardar(LINEAS[nombre]["setlist"])
 
 
 def _mixer() -> MezcladorJack:
@@ -195,6 +218,14 @@ async def _manejar_desconexion(_request: Request, exc: ConnectionError) -> JSONR
     de después ya puede andar de nuevo sin que nadie reinicie nada a mano.
     """
     return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(TimeoutError)
+async def _manejar_timeout(_request: Request, _exc: TimeoutError) -> JSONResponse:
+    """El motor no contestó a tiempo (colgado o muy cargado). El socket sigue vivo, así que no
+    se cierra -- pero es un 504 con mensaje, no un 500 mudo."""
+    return JSONResponse(status_code=504, content={"detail": "Guitarix no respondió a tiempo"})
+
 
 # La PWA de control remoto (mobile/) se sirve desde esta misma app, montada bajo /app -- así una
 # ruta relativa como fetch("/estado") funciona igual en local que atrás de un túnel público, sin
@@ -325,19 +356,49 @@ class EjecutarAccion(BaseModel):
     parametro: int | None = None
 
 
-def _estado_linea(ctrl: ControladorEscenario) -> dict:
+def _categorias_gx(linea: str) -> dict[str, str | None]:
+    """id -> categoría cruda del motor, o {} si el motor no responde (la categoría de interfaz
+    igual se resuelve por los overrides de engine/categorias.py)."""
+    try:
+        return {p["id"]: p.get("category") for p in _plugins(linea) if p.get("id")}
+    except ConnectionError:
+        return {}
+
+
+def _cadena_actual(ctrl: ControladorEscenario) -> set[str] | None:
+    try:
+        return set(ctrl.rpc.orden_rack(0)) | set(ctrl.rpc.orden_rack(1))
+    except ConnectionError:
+        return None
+
+
+def _estado_linea(ctrl: ControladorEscenario, linea: str | None = None) -> dict:
     preset = ctrl.preset
+    setlist = ctrl.setlist
+    cats_gx = _categorias_gx(linea) if linea else {}
+    en_rack = _cadena_actual(ctrl) if linea else None
+    banco_vis = setlist.bancos[ctrl.banco_visible]
     return {
         "preset": preset.nombre,
         "indice_activo": ctrl.indice_activo,
         "banco_activo": ctrl.banco_activo,
         "banco_visible": ctrl.banco_visible,
         "posicion_activa": ctrl.posicion_activa,
+        "total_bancos": len(setlist.bancos),
+        "banco_activo_nombre": setlist.bancos[ctrl.banco_activo].nombre,
+        "banco_visible_nombre": banco_vis.nombre,
+        "presets_banco_visible": [p.nombre for p in banco_vis.presets],
         "modo": ctrl.modo.value,
         "escena_activa": ctrl.escena_activa,
         "tempo_bpm": ctrl.tempo_bpm,
         "stomps": [
-            {"etiqueta": s.etiqueta, "unidad": s.unidad, "activo": ctrl.stomp_activo(i)}
+            {
+                "etiqueta": s.etiqueta,
+                "unidad": s.unidad,
+                "activo": ctrl.stomp_activo(i),
+                "categoria": categoria(s.unidad, cats_gx.get(s.unidad)),
+                "en_cadena": None if en_rack is None else s.unidad in en_rack,
+            }
             for i, s in enumerate(preset.stomps)
         ],
         "escenas": [e.nombre for e in preset.escenas],
@@ -354,7 +415,7 @@ def listar_lineas() -> list[str]:
 def estado_linea(linea: str) -> dict:
     """Preset activo, banco visible, modo, escena, tempo y estado de cada stomp -- la parte de
     control de performance que `/preset`/`/parametros` (Guitarix crudo) no cubren."""
-    return _estado_linea(_linea(linea))
+    return _estado_linea(_linea(linea), linea)
 
 
 @app.post("/lineas/{linea}/accion")
@@ -375,7 +436,119 @@ def ejecutar_accion(linea: str, datos: EjecutarAccion) -> dict:
         mensaje = ctrl.ejecutar(accion, datos.parametro)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    return {"mensaje": mensaje, **_estado_linea(ctrl)}
+    return {"mensaje": mensaje, **_estado_linea(ctrl, linea)}
+
+
+@app.post("/lineas/{linea}/guardar")
+def guardar_preset_linea(linea: str) -> dict:
+    """Botón 💾: guarda el estado real del motor (cadena del rack + valores) en el preset activo
+    y escribe la setlist de esa línea a disco."""
+    ctrl = _linea(linea)
+    ctrl.guardar_en_preset()
+    _guardar_setlist(linea)
+    return {"mensaje": f"Guardado: {ctrl.preset.nombre}", **_estado_linea(ctrl, linea)}
+
+
+@app.post("/lineas/{linea}/escenas")
+def nueva_escena_linea(linea: str) -> dict:
+    """Tile "+" del modo SCENE: crea una escena con el estado actual (nombre automático por
+    letra; se renombra desde el sistema, no desde la app) y la guarda en la setlist."""
+    ctrl = _linea(linea)
+    try:
+        nombre = ctrl.nueva_escena()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    _guardar_setlist(linea)
+    return {"mensaje": f"Escena creada: {nombre}", **_estado_linea(ctrl, linea)}
+
+
+def _grid(linea: str) -> dict:
+    """Las dos cadenas reales del rack (mono -> estéreo, en serie), cada bloque con nombre,
+    categoría de interfaz y si está encendido -- todo lo que dibuja el GRID en un solo pedido."""
+    ctrl = _linea(linea)
+    todos = _plugins(linea)
+    nombre_de = nombres(todos)
+    cat_gx = {p["id"]: p.get("category") for p in todos if p.get("id")}
+    no_quitables = fijos(todos)
+    filas = []
+    for clave, estereo in (("mono", 0), ("estereo", 1)):
+        ids = list(ctrl.rpc.orden_rack(estereo))
+        encendido = ctrl.rpc.obtener(*[f"{u}.on_off" for u in ids]) if ids else {}
+        filas.append({
+            "cadena": clave,
+            "estereo": bool(estereo),
+            "unidades": [
+                {
+                    "id": u,
+                    "nombre": nombre_de.get(u, u),
+                    "categoria": categoria(u, cat_gx.get(u)),
+                    "encendido": bool(encendido.get(f"{u}.on_off")),
+                    "fijo": u in no_quitables,
+                }
+                for u in ids
+            ],
+        })
+    return {"filas": filas}
+
+
+@app.get("/lineas/{linea}/grid")
+def grid_linea(linea: str) -> dict:
+    return _grid(linea)
+
+
+@app.get("/lineas/{linea}/plugins")
+def plugins_linea(linea: str) -> dict:
+    """Bloques que se pueden agregar desde el "+", agrupados por categoría de interfaz en el
+    orden de la leyenda. Solo aparecen las categorías que tienen al menos un modelo real."""
+    lista = insertables(_plugins(linea))
+    en_rack = _cadena_actual(_linea(linea)) or set()
+    for p in lista:
+        p["en_cadena"] = p["id"] in en_rack
+    categorias = [
+        {"id": clave, "nombre": nombre, "plugins": [p for p in lista if p["categoria"] == clave]}
+        for clave, nombre in CATEGORIAS
+    ]
+    return {"categorias": [c for c in categorias if c["plugins"]]}
+
+
+class CambiarBloque(BaseModel):
+    unidad: str
+    estereo: bool = False
+
+
+def _validar_insertable(linea: str, datos: CambiarBloque) -> None:
+    validos = {p["id"]: p for p in insertables(_plugins(linea))}
+    if datos.unidad not in validos:
+        raise HTTPException(404, f"bloque desconocido: {datos.unidad!r}")
+    if validos[datos.unidad]["estereo"] != datos.estereo:
+        fila = "estéreo" if datos.estereo else "mono"
+        raise HTTPException(400, f"{datos.unidad!r} no va en la fila {fila}")
+
+
+@app.post("/lineas/{linea}/grid/insertar")
+def insertar_bloque(linea: str, datos: CambiarBloque) -> dict:
+    """Agrega un bloque al final de su fila y lo deja encendido. Cada unidad existe una sola
+    vez en el motor: si ya está en el rack, 409."""
+    _validar_insertable(linea, datos)
+    ctrl = _linea(linea)
+    if datos.unidad in (_cadena_actual(ctrl) or set()):
+        raise HTTPException(409, f"{datos.unidad!r} ya está en el rack")
+    ctrl.rpc.insertar_unidad(datos.unidad, "", datos.estereo)
+    ctrl.rpc.fijar(f"{datos.unidad}.on_off", 1)
+    return _grid(linea)
+
+
+@app.post("/lineas/{linea}/grid/quitar")
+def quitar_bloque(linea: str, datos: CambiarBloque) -> dict:
+    """Los bloques fijos (ampstack y compañía) se rechazan con 400: quitarlos hace segfault en
+    Guitarix -- confirmado el 25/09/2026, tumbó el motor desde la PWA. Ver engine/categorias.py."""
+    if datos.unidad in fijos(_plugins(linea)):
+        raise HTTPException(400, f"{datos.unidad!r} es un bloque fijo del motor: no se puede quitar")
+    ctrl = _linea(linea)
+    if datos.unidad not in ctrl.rpc.orden_rack(int(datos.estereo)):
+        raise HTTPException(404, f"{datos.unidad!r} no está en esa fila")
+    ctrl.rpc.quitar_unidad(datos.unidad, datos.estereo)
+    return _grid(linea)
 
 
 @app.get("/lineas/{linea}/parametros")

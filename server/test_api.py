@@ -13,12 +13,22 @@ PEP 668).
 Se ejecuta como modulo (python -m server.test_api) para que el import relativo funcione igual en
 Windows y en Linux/WSL2.
 """
+import json
+import os
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-import server.api as api
+# Las setlists de trabajo (las que escribe el botón de guardar) van a un directorio temporal: los
+# tests no deben tocar presets/setlists/ del repo. Tiene que fijarse ANTES de importar la API,
+# que lee la variable al cargar el módulo.
+_DIR_SETLISTS_TEST = tempfile.mkdtemp(prefix="setlists_test_")
+os.environ["SETLISTS_DIR"] = _DIR_SETLISTS_TEST
+
+import server.api as api  # noqa: E402
 
 fallos = []
 
@@ -43,6 +53,7 @@ class GXFalso:
         self.falla_conectar = False
         self.falla_version = None  # GuitarixError, si se quiere simular un error del motor
         self.falla_conexion = False  # simula que el socket se corto a mitad de pedido
+        self.rack = {0: ["ampstack", "freeverb"], 1: []}
         GXFalso.instancias.append(self)
 
     def conectar(self):
@@ -73,7 +84,26 @@ class GXFalso:
         return ["Clean", "Lead"]
 
     def orden_rack(self, cadena=0):
-        return ["ampstack", "freeverb"] if cadena == 0 else []
+        return list(self.rack[cadena])
+
+    def insertar_unidad(self, unidad, antes_de="", estereo=False):
+        self.llamadas.append(("insert", unidad, int(estereo)))
+        self.rack[int(estereo)].append(unidad)
+
+    def quitar_unidad(self, unidad, estereo=False):
+        self.llamadas.append(("remove", unidad, int(estereo)))
+        self.rack[int(estereo)].remove(unidad)
+
+    def plugins(self):
+        return [
+            {"id": "12AX7", "flags": 0x128, "name": "12AX7", "category": ""},
+            {"id": "ampstack", "flags": 131332, "name": "Amp", "category": ""},
+            {"id": "noise_gate", "flags": 0x2094A, "name": "Noise Gate", "category": "NONE"},
+            {"id": "ts9sim", "flags": 0x10108, "name": "Tube Screamer", "category": "Distortion"},
+            {"id": "freeverb", "flags": 0x10108, "name": "Freeverb", "category": "Reverb"},
+            {"id": "echo", "flags": 0x10108, "name": "Echo", "category": "Echo / Delay"},
+            {"id": "chorus", "flags": 0x109, "name": "Chorus", "category": "Modulation"},
+        ]
 
     def consultar_unidad(self, unidad):
         if unidad == "ampstack":
@@ -159,6 +189,9 @@ def reset():
     MixerFalso.instancias.clear()
     api._mezclador = None
     api._controladores.clear()
+    api._cache_plugins.clear()
+    for f in Path(_DIR_SETLISTS_TEST).glob("*.json"):
+        f.unlink()
 
 
 api.GuitarixRPC = GXFalso
@@ -310,7 +343,7 @@ print("\n13. /app/ sirve la PWA de control remoto (mobile/)")
 r = client.get("/app/")
 check("200", r.status_code == 200, f"-> {r.status_code}")
 check("es html", "text/html" in r.headers.get("content-type", ""), f"-> {r.headers}")
-check("es el index de la PWA", "PedalSistema" in r.text, f"-> {r.text[:80]}")
+check("es el index de la PWA", "<title>Arquitec DSP</title>" in r.text, f"-> {r.text[:80]}")
 r = client.get("/app/app.js")
 check("app.js 200", r.status_code == 200, f"-> {r.status_code}")
 r = client.get("/app/manifest.json")
@@ -405,6 +438,104 @@ api._gx.falla_conexion = True
 r = client.get("/estado")
 check("503 con ConnectionError (no 500)", r.status_code == 503 and "perdió la conexión" in r.text,
       f"-> {r.status_code} {r.text}")
+
+print("\n19. /lineas/{linea}/estado trae lo que necesitan PRESETS y GIG")
+reset()
+r = client.get("/lineas/guitarra1/estado")
+e = r.json()
+check("presets del banco visible", e["presets_banco_visible"] == ["Clean Verso", "Crunch", "Lead"],
+      f"-> {e.get('presets_banco_visible')}")
+check("nombre del banco y total", (e["banco_visible_nombre"], e["total_bancos"]) == ("Set 1", 2),
+      f"-> {e.get('banco_visible_nombre')}, {e.get('total_bancos')}")
+check("stomps con categoria de interfaz", [s["categoria"] for s in e["stomps"]] == ["modulation", "delay"],
+      f"-> {e['stomps']}")
+check("stomps marcan si estan en el rack", [s["en_cadena"] for s in e["stomps"]] == [False, False],
+      f"-> {e['stomps']}")
+check("la setlist de trabajo se creo copiando el ejemplo, fuera del repo",
+      (Path(_DIR_SETLISTS_TEST) / "guitarra1.json").exists())
+
+print("\n20. GET /lineas/{linea}/grid: dos filas reales, con nombre/categoria/on-off")
+reset()
+r = client.get("/lineas/guitarra1/grid")
+filas = r.json()["filas"]
+check("fila mono y estereo", [f["cadena"] for f in filas] == ["mono", "estereo"], f"-> {filas}")
+check("bloques de la fila mono con nombre legible y categoria",
+      [(u["id"], u["nombre"], u["categoria"]) for u in filas[0]["unidades"]]
+      == [("ampstack", "Amp", "amp"), ("freeverb", "Freeverb", "reverb")], f"-> {filas[0]}")
+check("estado on/off", all(u["encendido"] is True for u in filas[0]["unidades"]))
+check("ampstack marcado fijo, freeverb no",
+      [u["fijo"] for u in filas[0]["unidades"]] == [True, False], f"-> {filas[0]}")
+
+print("\n21. GET /lineas/{linea}/plugins: agrupado por categoria, sin variantes internas")
+r = client.get("/lineas/guitarra1/plugins")
+cats = r.json()["categorias"]
+ids = [p["id"] for c in cats for p in c["plugins"]]
+check("orden de la leyenda y solo categorias con modelos",
+      [c["id"] for c in cats] == ["overdrive", "modulation", "delay", "reverb"],
+      f"-> {[c['id'] for c in cats]}")
+check("12AX7 (variante interna) no aparece", "12AX7" not in ids, f"-> {ids}")
+check("bloques fijos (ampstack, noise_gate) no aparecen: insertarlos tumba al motor",
+      not {"ampstack", "noise_gate"} & set(ids), f"-> {ids}")
+check("marca los que ya estan en el rack",
+      {p["id"]: p["en_cadena"] for c in cats for p in c["plugins"]}["freeverb"] is True)
+
+print("\n22. Insertar / quitar bloques")
+reset()
+r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "ts9sim", "estereo": False})
+check("200 y queda al final de la fila mono",
+      r.status_code == 200 and [u["id"] for u in r.json()["filas"][0]["unidades"]][-1] == "ts9sim",
+      f"-> {r.status_code} {r.text[:200]}")
+fake = api._linea("guitarra1").rpc
+check("queda encendido", ("set", "ts9sim.on_off", 1) in fake.llamadas, f"-> {fake.llamadas}")
+r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "ts9sim", "estereo": False})
+check("409 si ya esta en el rack", r.status_code == 409, f"-> {r.status_code}")
+r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "chorus", "estereo": False})
+check("400 si va en la fila equivocada (chorus es estereo)", r.status_code == 400, f"-> {r.status_code} {r.text}")
+r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "12AX7", "estereo": False})
+check("404 si no es un bloque insertable", r.status_code == 404, f"-> {r.status_code}")
+r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "chorus", "estereo": True})
+check("estereo va a la segunda fila", [u["id"] for u in r.json()["filas"][1]["unidades"]] == ["chorus"],
+      f"-> {r.json()}")
+r = client.post("/lineas/guitarra1/grid/quitar", json={"unidad": "ts9sim", "estereo": False})
+check("quitar", "ts9sim" not in [u["id"] for u in r.json()["filas"][0]["unidades"]], f"-> {r.json()}")
+r = client.post("/lineas/guitarra1/grid/quitar", json={"unidad": "ts9sim", "estereo": False})
+check("404 al quitar algo que no esta", r.status_code == 404, f"-> {r.status_code}")
+fake.llamadas.clear()
+r = client.post("/lineas/guitarra1/grid/quitar", json={"unidad": "ampstack", "estereo": False})
+check("400 al quitar ampstack (segfault en el motor real)", r.status_code == 400, f"-> {r.status_code}")
+check("...y no llega a mandarse al motor",
+      not any(c[0] in ("remove", "remove_rack_unit") for c in fake.llamadas), f"-> {fake.llamadas}")
+r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "noise_gate", "estereo": False})
+check("404 al insertar un bloque fijo", r.status_code == 404, f"-> {r.status_code}")
+
+print("\n23. Guardar (💾) escribe la cadena y los valores en la setlist de trabajo")
+reset()
+client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "ts9sim", "estereo": False})
+r = client.post("/lineas/guitarra1/guardar")
+check("200", r.status_code == 200, f"-> {r.status_code} {r.text[:200]}")
+guardado = json.loads((Path(_DIR_SETLISTS_TEST) / "guitarra1.json").read_text(encoding="utf-8"))
+preset0 = guardado["bancos"][0]["presets"][0]
+check("cadena guardada en disco", preset0.get("cadena") == {"mono": ["ampstack", "freeverb", "ts9sim"],
+                                                           "estereo": []}, f"-> {preset0.get('cadena')}")
+check("valores capturados (no 'position')",
+      "amp2.stage1.Pregain" in preset0["parametros"] and "ampstack.position" not in preset0["parametros"],
+      f"-> {preset0['parametros']}")
+ejemplo = json.loads(api._RUTA_SETLIST_EJEMPLO.read_text(encoding="utf-8"))
+check("la setlist de ejemplo del repo NO se toco", "cadena" not in ejemplo["bancos"][0]["presets"][0])
+
+print("\n24. + New scene: crea 'Scene C' (el preset ya tiene A y B) y la guarda")
+reset()
+r = client.post("/lineas/guitarra1/escenas")
+check("200 y queda activa", r.status_code == 200 and r.json()["escena_activa"] == "Scene C",
+      f"-> {r.status_code} {r.text[:200]}")
+check("aparece en la lista", r.json()["escenas"] == ["Estrofa", "Estribillo", "Scene C"])
+guardado = json.loads((Path(_DIR_SETLISTS_TEST) / "guitarra1.json").read_text(encoding="utf-8"))
+check("persistida en disco", [e["nombre"] for e in guardado["bancos"][0]["presets"][0]["escenas"]][-1]
+      == "Scene C")
+for _ in range(5):
+    client.post("/lineas/guitarra1/escenas")
+r = client.post("/lineas/guitarra1/escenas")
+check("400 al pasar de 8 (A-H)", r.status_code == 400, f"-> {r.status_code} {r.text}")
 
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

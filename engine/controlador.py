@@ -14,9 +14,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 
+from engine.categorias import fijos
 from engine.midi_engine import Accion
 from presets.preset_manager import (
-    MAX_PRESETS, PRESETS_POR_BANCO, Preset, Setlist, valor_rpc,
+    CADENAS, MAX_ESCENAS, MAX_PRESETS, PRESETS_POR_BANCO, Escena, Preset, Setlist, valor_rpc,
 )
 
 
@@ -49,6 +50,8 @@ class ControladorEscenario:
     # medida que el músico pisa; no se persiste, se reinicia al cambiar de preset.
     _stomps: dict[str, bool] = field(default_factory=dict, repr=False)
     _taps: list[float] = field(default_factory=list, repr=False)
+    # Ids de bloques fijos del motor; se piden una sola vez (la lista de plugins no cambia).
+    _fijas: frozenset[str] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.setlist.total_presets:
@@ -99,6 +102,8 @@ class ControladorEscenario:
         """
         if incluir_base and preset.guitarix_banco and preset.guitarix_preset:
             self.rpc.set_preset(preset.guitarix_banco, preset.guitarix_preset)
+        if incluir_base and preset.cadena:
+            self._sincronizar_cadena(preset.cadena)
         pares = preset.pares_rpc(self.escena_activa)
         # Los stomps pisados en runtime ganan sobre lo que dice el preset.
         valores = dict(zip(pares[::2], pares[1::2]))
@@ -109,6 +114,87 @@ class ControladorEscenario:
             for nombre, valor in valores.items():
                 planos += [nombre, valor]
             self.rpc.fijar(*planos)
+
+    def _sincronizar_cadena(self, cadena: dict[str, list[str]]) -> None:
+        """Deja el rack con exactamente los bloques guardados en el preset, en ese orden.
+
+        Si el orden actual ya coincide no se toca nada (cambiar de preset entre dos que usan la
+        misma cadena no tiene por qué sacar y volver a meter bloques). Si difiere, se vacía la
+        cadena y se reinsertan en orden: más simple y más fácil de verificar que calcular
+        movimientos mínimos, y los valores de cada bloque (incluido su on/off) se reaplican igual
+        en el `set` que viene justo después.
+
+        Los bloques fijos (`ampstack` y compañía, ver `engine/categorias.py`) NUNCA se quitan ni
+        se insertan: Guitarix hace segfault. Quedan donde están y los demás se insertan delante
+        del fijo que les sigue en el orden guardado (`insert_rack_unit(unidad, antes_de, ...)`).
+        """
+        fijas = self._unidades_fijas()
+        for clave, estereo in CADENAS.items():
+            if clave not in cadena:
+                continue
+            objetivo = cadena[clave]
+            actual = list(self.rpc.orden_rack(estereo))
+            if actual == objetivo:
+                continue
+            for unidad in actual:
+                if unidad not in fijas:
+                    self.rpc.quitar_unidad(unidad, bool(estereo))
+            presentes_fijas = [u for u in actual if u in fijas]
+            for i, unidad in enumerate(objetivo):
+                if unidad in fijas:
+                    continue
+                antes_de = next((u for u in objetivo[i + 1:] if u in presentes_fijas), "")
+                self.rpc.insertar_unidad(unidad, antes_de, bool(estereo))
+
+    def _unidades_fijas(self) -> frozenset[str]:
+        if self._fijas is None:
+            self._fijas = fijos(self.rpc.plugins())
+        return self._fijas
+
+    # -- Captura del estado actual (botón guardar y "+ New scene" del GIG) ------------
+
+    def capturar(self) -> tuple[dict[str, list[str]], dict[str, Any]]:
+        """Lee del motor la cadena actual y el valor de cada parámetro controlable de cada
+        bloque. Solo `float` y `bool`: lo mismo que la interfaz deja tocar (ver
+        `server/api.py`, `_parametros_unidad`) -- guardar selectores internos como
+        `<unidad>.position` metería en el preset coordenadas de la GUI de escritorio."""
+        cadena = {clave: list(self.rpc.orden_rack(est)) for clave, est in CADENAS.items()}
+        parametros: dict[str, Any] = {}
+        for unidades in cadena.values():
+            for unidad in unidades:
+                for nombre, meta in self.rpc.consultar_unidad(unidad).items():
+                    tipo = meta.get("type")
+                    if tipo not in ("float", "bool"):
+                        continue
+                    valor = meta.get("value", {}).get(nombre)
+                    if valor is None:
+                        continue
+                    parametros[nombre] = bool(valor) if tipo == "bool" else valor
+        return cadena, parametros
+
+    def guardar_en_preset(self) -> Preset:
+        """Guarda el estado real del motor en el preset activo (cadena + parámetros). Los
+        stomps pisados pasan a ser el estado guardado: lo que suena es lo que queda."""
+        preset = self.preset
+        cadena, parametros = self.capturar()
+        preset.cadena = cadena
+        preset.parametros = parametros
+        for stomp in preset.stomps:
+            stomp.activo = bool(parametros.get(stomp.parametro, stomp.activo))
+        self._stomps = {s.unidad: s.activo for s in preset.stomps}
+        return preset
+
+    def nueva_escena(self) -> str:
+        """Crea una escena nueva con el estado actual y la deja activa. Nombre automático
+        ("Scene C", ...) -- el nombre se edita desde el sistema, no desde la app remota."""
+        preset = self.preset
+        if len(preset.escenas) >= MAX_ESCENAS:
+            raise ValueError(f"El preset ya tiene {MAX_ESCENAS} escenas (A-H)")
+        letra = chr(ord("A") + len(preset.escenas))
+        _, parametros = self.capturar()
+        preset.escenas.append(Escena(f"Scene {letra}", parametros))
+        self.escena_activa = f"Scene {letra}"
+        return self.escena_activa
 
     # -- Ejecución de acciones --------------------------------------------------------
 

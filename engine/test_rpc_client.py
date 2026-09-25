@@ -181,6 +181,30 @@ def main():
         time.sleep(0.1)
         check("sigue habiendo una sola 'nam'", rack_orden.count("nam") == 1, f"-> {rack_orden}")
 
+        print("\n10. Llamadas simultaneas desde varios hilos (como los endpoints de FastAPI)")
+        # Bug real (25/09/2026): la PWA pide /estado y /grid en paralelo, los dos hilos
+        # compartian el socket sin lock y uno se leia la respuesta del otro -> timeout -> 500.
+        esperado = {"version": "0.46.0", "estado": "running", "carga_cpu": 12.5}
+        errores = []
+
+        def martillar():
+            try:
+                for _ in range(25):
+                    for metodo, valor in esperado.items():
+                        r = getattr(gx, metodo)()
+                        if r != valor:
+                            errores.append(f"{metodo} -> {r!r}")
+            except Exception as exc:  # noqa: BLE001 -- se reporta como fallo del test
+                errores.append(repr(exc))
+
+        hilos = [threading.Thread(target=martillar) for _ in range(8)]
+        for h in hilos:
+            h.start()
+        for h in hilos:
+            h.join(30)
+        check("600 llamadas concurrentes, todas con su propia respuesta", not errores,
+              f"-> {errores[:3]}")
+
     parar.set()
     print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
     return 1 if fallos else 0

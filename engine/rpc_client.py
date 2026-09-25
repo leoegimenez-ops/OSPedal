@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 from collections import deque
 from typing import Any, Iterator
 
@@ -87,6 +88,12 @@ class GuitarixRPC:
         # Las notificaciones pueden llegar intercaladas con las respuestas. Las que aparezcan
         # mientras esperamos un resultado se guardan acá en vez de descartarse.
         self._notificaciones: deque[dict[str, Any]] = deque()
+        # Un mismo cliente se comparte entre los hilos de FastAPI (los endpoints sync corren en
+        # un threadpool). Sin este lock, dos pedidos simultáneos -- la PWA pide /estado y /grid
+        # en paralelo al abrir -- escriben en el mismo socket y se leen la respuesta el uno al
+        # otro: uno se queda esperando una línea que ya consumió el otro y termina en timeout
+        # (500). Confirmado en vivo el 25/09/2026. RLock porque llamar() usa conectar().
+        self._lock = threading.RLock()
 
     # -- Ciclo de vida ----------------------------------------------------------------
 
@@ -164,6 +171,10 @@ class GuitarixRPC:
 
         Solo para métodos con `has_result = true`. Ver `docs/guitarix-rpc-methods.md`.
         """
+        with self._lock:
+            return self._llamar(metodo, *params)
+
+    def _llamar(self, metodo: str, *params: Any) -> Any:
         self.conectar()
         self._id += 1
         id_peticion = self._id
@@ -203,8 +214,9 @@ class GuitarixRPC:
         Es el modo correcto para los métodos con `has_result = false` y para todo lo que esté
         en el camino crítico de latencia: evita el round-trip completo.
         """
-        self.conectar()
-        self._enviar({"jsonrpc": "2.0", "method": metodo, "params": list(params)})
+        with self._lock:
+            self.conectar()
+            self._enviar({"jsonrpc": "2.0", "method": metodo, "params": list(params)})
 
     # -- Eventos ----------------------------------------------------------------------
 
@@ -370,9 +382,19 @@ class GuitarixRPC:
         estéreo: int)`. `antes_de=""` inserta al final de la cadena; `estéreo=0` es la cadena
         mono, la que usan NAM/RTNeural (señal de guitarra).
         """
-        orden = self.llamar("get_rack_unit_order", 0)
-        if unidad not in orden:
-            self.notificar("insert_rack_unit", unidad, "", 0)
+        if unidad not in self.orden_rack(0):
+            self.insertar_unidad(unidad)
+
+    def insertar_unidad(self, unidad: str, antes_de: str = "", estereo: bool = False) -> None:
+        """Agrega un bloque al rack. `antes_de=""` lo pone al final de la cadena. Notificación
+        pura (ver el docstring de `_insertar_en_rack_si_falta` sobre por qué no puede ir con id).
+        """
+        self.notificar("insert_rack_unit", unidad, antes_de, int(estereo))
+
+    def quitar_unidad(self, unidad: str, estereo: bool = False) -> None:
+        """Saca un bloque del rack. El motor además apaga su `on_off` (`jsonrpc.cpp`,
+        `remove_rack_unit`). Notificación pura, igual que insertar."""
+        self.notificar("remove_rack_unit", unidad, int(estereo))
 
     def cargar_nam(self, carpeta: str, indice: int = 1, ranura: str = "nam") -> None:
         """Carga un modelo .nam y lo deja sonando. `carpeta` es una ruta absoluta que Guitarix

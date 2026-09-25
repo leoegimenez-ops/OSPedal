@@ -1,566 +1,895 @@
-/* PWA de control remoto -- PedalSistema / Arquitec DSP.
+"use strict";
+/* Arquitec DSP -- control remoto (tablet / celular) de PedalSistema.
  *
- * Sin build step, sin framework: fetch() directo contra server/api.py, servido desde el mismo
- * origen (montado en /app), así que las rutas relativas funcionan igual atrás de un túnel
- * público que en local.
- *
- * Cuatro pestañas fijas abajo (pensada primero para horizontal, como un pedal real de piso):
- *  - NODOS: la cadena de efectos de una línea como fila de bloques -- pantalla principal.
- *    Tocar un bloque abre sus parámetros (queryunit) y su on/off. Reemplaza lo que en otros
- *    sistemas es una pantalla de "stomps" aparte: acá encender/apagar un efecto es prender su
- *    propio nodo, no una lista separada.
- *  - PRESETS: nombre del preset activo, navegación, afinador, tap tempo.
- *  - ESCENAS: variaciones dentro del preset activo.
- *  - ENVÍOS: las 5 mezclas de monitor (engine/mixer.py) -- gain/pan por fuente y por bus.
- *
- * NODOS/PRESETS/ESCENAS trabajan sobre una LÍNEA de instrumento (una instancia de Guitarix);
- * ENVÍOS trabaja sobre un BUS de mezcla. Por eso la tira de "contexto" arriba del contenido
- * muestra líneas o buses según la pestaña activa -- son dos conjuntos de datos distintos.
+ * Réplica del layout de Cortex Control acordada con el usuario el 25/09/2026:
+ *  - GRID: un instrumento por pantalla. Las dos filas son las dos cadenas REALES del motor, en
+ *    serie: In -> fila mono -> "Row 2" -> fila estéreo -> Out 1/2. Tocar un bloque abre el panel
+ *    de perillas abajo; "+" abre la grilla de categorías y después los modelos.
+ *  - PRESETS: los 8 presets del banco como tiles 1A-1H.
+ *  - GIG: grilla A-H con modo STOMP (efectos on/off) o SCENE (escenas, "+" crea una nueva).
+ *  - SENDS: consola con fader vertical + perilla de paneo por instrumento, un bus a la vez.
+ * Sin framework ni build: fetch() contra server/api.py, servido en el mismo origen (/app).
  */
 
-const $app = document.getElementById("app");
-const $contexto = document.getElementById("contexto");
-const $tabsPrincipales = document.getElementById("tabs-principales");
-const $dot = document.getElementById("dot-conexion");
-const $txtEstado = document.getElementById("txt-estado");
-const $txtCpu = document.getElementById("txt-cpu");
+const $ = (id) => document.getElementById(id);
+const $contenido = $("contenido");
+const $panel = $("panel-bloque");
+const $velo = $("velo");
+const $popover = $("popover");
+const $selector = $("selector");
+const $aviso = $("aviso");
 
-let tabPrincipal = "nodos";
+const LETRAS = "ABCDEFGH".split("");
+const ETIQUETA_LINEA = { guitarra1: "GTR 1", guitarra2: "GTR 2", bajo: "BASS", voz: "VOX" };
+const ETIQUETA_BUS = { monitor1: "MON 1", monitor2: "MON 2", monitor3: "MON 3", monitor4: "MON 4", pa: "PA" };
+const etiquetaLinea = (l) => ETIQUETA_LINEA[l] || String(l).toUpperCase();
+const etiquetaBus = (b) => ETIQUETA_BUS[b] || String(b).toUpperCase();
 
-let lineas = [];
-let lineaActiva = null;
+/* Íconos propios, trazo blanco sobre cuadrado negro con borde de color -- mismo estilo que la
+ * leyenda de referencia, dibujo nuestro. viewBox 24x24. */
+const CATEGORIAS = {
+  amp:        { nombre: "Amp",            color: "#EF4444", icono: '<rect x="3" y="6.5" width="18" height="11" rx="2"/><path d="M6.5 10.5h11M6.5 13.5h11"/>' },
+  neural:     { nombre: "Neural Capture", color: "#F4F4F5", icono: '<circle cx="12" cy="12" r="8"/><path d="M8 6.5h8M5.5 9.3h13M4.2 12h15.6M5.5 14.7h13M8 17.5h8"/>' },
+  cab:        { nombre: "Cab",            color: "#7C3AED", icono: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.7"/><circle cx="4.5" cy="4.5" r=".9" class="relleno"/><circle cx="19.5" cy="4.5" r=".9" class="relleno"/><circle cx="4.5" cy="19.5" r=".9" class="relleno"/><circle cx="19.5" cy="19.5" r=".9" class="relleno"/>' },
+  ir:         { nombre: "IR Loader",      color: "#A5B4FC", icono: '<path d="M4 12h1.5M6.5 6v12M10 9v6M13.5 4v16M17 9.5v5M20 11v2"/>' },
+  overdrive:  { nombre: "Overdrive",      color: "#F97316", icono: '<path d="M3 13c3.2-10 6.2-10 9-1s5.8 9 9-1"/>' },
+  compressor: { nombre: "Compressor",     color: "#22C55E", icono: '<path d="M3.5 12.5c1.6-3.5 3.3-3.5 5 0s3.4 3.5 5 0 3.4-3.5 5 0 1.8 2 2 1.5"/><path d="M12 2.5v4.5M10.2 5.3 12 7l1.8-1.7M12 21.5V17M10.2 18.7 12 17l1.8 1.7"/>' },
+  eq:         { nombre: "EQ",             color: "#3B82F6", icono: '<path d="M6 4v16M12 4v16M18 4v16"/><rect x="4" y="12.5" width="4" height="3" rx="1" class="relleno"/><rect x="10" y="6.5" width="4" height="3" rx="1" class="relleno"/><rect x="16" y="14.5" width="4" height="3" rx="1" class="relleno"/>' },
+  filter:     { nombre: "Filter",         color: "#7DD3FC", icono: '<path d="M3 8h9.5c2.5 0 3.5 2 4.5 5l2.5 6"/>' },
+  wah:        { nombre: "Wah",            color: "#D4D4D8", icono: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><rect x="9.5" y="6" width="5" height="8.5" rx="1.2"/>' },
+  pitch:      { nombre: "Pitch",          color: "#EAB308", icono: '<path d="M3 17h5.5c3.5 0 3-10 7-10H21"/>' },
+  modulation: { nombre: "Modulation",     color: "#6366F1", icono: '<path d="M3 12c1.5-5.5 3-5.5 4.5 0s3 5.5 4.5 0 3-5.5 4.5 0 3 5.5 4.5 0"/>' },
+  delay:      { nombre: "Delay",          color: "#14B8A6", icono: '<circle cx="6.5" cy="12" r="3"/><path d="M12.5 7.5a6.5 6.5 0 0 1 0 9"/><path d="M16.5 4.5a10.5 10.5 0 0 1 0 15" opacity=".5"/>' },
+  reverb:     { nombre: "Reverb",         color: "#22D3EE", icono: '<path d="M12 3.5l8 4v9l-8 4-8-4v-9z"/><path d="M4 7.5l8 4 8-4M12 11.5v9"/>' },
+  looper:     { nombre: "Looper",         color: "#EC4899", icono: '<circle cx="7" cy="11" r="3.5"/><circle cx="17" cy="11" r="3.5"/><path d="M7 14.5h10M9 18.5h6"/>' },
+  utility:    { nombre: "Utility",        color: "#71717A", icono: '<path d="M5 19 9.5 5M5 19l8-11.5M5 19l11.5-6.5M5 19l13-1.5"/>' },
+};
+const ICONO_ESCENA = '<path d="M12 3.5 21 8l-9 4.5L3 8z"/><path d="M3 12l9 4.5 9-4.5M3 16l9 4.5 9-4.5"/>';
+const ICONO_MAS = '<path d="M12 5v14M5 12h14"/>';
+const COLORES_ESCENA = ["#F97316", "#38BDF8", "#22C55E", "#EF4444", "#14B8A6", "#8B5CF6", "#EAB308", "#EC4899"];
 
-// -- Estado de NODOS ----------------------------------------------------------------------
-let cadena = [];
-let estadosOnOff = {};       // "unidad" -> bool
-let nodoSeleccionado = null;
-let parametrosNodo = [];
+const svg = (interior, vb = "0 0 24 24") => `<svg viewBox="${vb}">${interior}</svg>`;
+const cat = (c) => CATEGORIAS[c] || CATEGORIAS.utility;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 
-// -- Estado de PRESETS / ESCENAS -----------------------------------------------------------
-let estadoLinea = null;
-
-// -- Estado de ENVÍOS (mezcla) -------------------------------------------------------------
-let matriz = null;
-let busActivo = null;
-const temporizadores = {};   // debounce: clave -> setTimeout id
-
-/* Íconos propios (line-art original, no calcados de ningún producto comercial) + un color bien
- * distinto por categoría para que se note el contraste sobre fondo negro puro -- pedido
- * explícito el 25/09/2026, con capturas de Cortex Control como referencia de estilo (no de
- * arte: los glifos de acá son nuestros). "icono" es el contenido interno de un <svg
- * viewBox="0 0 24 24" fill="none" stroke="currentColor">. */
-const ICONOS = {
-  amp: '<rect x="4" y="8" width="16" height="8" rx="1.5"/><circle cx="8" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="16" cy="12" r="1.3"/>',
-  cab: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.8" fill="currentColor"/>',
-  neural: '<rect x="3" y="9" width="2" height="6"/><rect x="7" y="6" width="2" height="12"/><rect x="11" y="3" width="2" height="18"/><rect x="15" y="7" width="2" height="10"/><rect x="19" y="10" width="2" height="4"/>',
-  overdrive: '<path d="M2.5 14h3l1.5-8 2 16 2-12 2 8 1.5-4h7"/>',
-  echo: '<path d="M4 12a8 8 0 1 1 2.6 5.9"/><path d="M4 18.5v-5.5h5.5"/>',
-  reverb: '<path d="M2.5 12a9.5 9.5 0 0 1 19 0"/><path d="M6 12a6 6 0 0 1 12 0"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/>',
-  modulacion: '<path d="M2.5 12c1.4-4.2 2.8-4.2 4.2 0s2.8 4.2 4.2 0 2.8-4.2 4.2 0 2.8 4.2 4.2 0"/>',
-  compresor: '<rect x="8.5" y="6" width="7" height="12" rx="1.5"/><path d="M3 12h4M17 12h4"/><path d="M6.5 9.5 3 12l3.5 2.5M17.5 9.5 21 12l-3.5 2.5"/>',
-  eq: '<line x1="6.5" y1="3.5" x2="6.5" y2="20.5"/><circle cx="6.5" cy="9" r="2"/><line x1="12" y1="3.5" x2="12" y2="20.5"/><circle cx="12" cy="15.5" r="2"/><line x1="17.5" y1="3.5" x2="17.5" y2="20.5"/><circle cx="17.5" cy="7" r="2"/>',
-  gate: '<path d="M4 12h4"/><path d="M9 5.5v13"/><path d="M15 5.5v13"/><path d="M16 12h4"/>',
-  wah: '<path d="M2.5 16c2-.3 3-2 4-5.5S8.5 5 11 5s3.5 2.5 4.5 6 2 5.2 4 5.5"/>',
-  escena: '<path d="M4 6.5h16v11H4z"/><path d="M4 6.5 12 12l8-5.5"/>',
-  generico: '<circle cx="12" cy="12" r="3"/>',
+const estado = {
+  tab: "grid",
+  lineas: [],
+  linea: null,
+  linea_estado: null,
+  grid: null,
+  seleccion: null,        // { id, estereo }
+  parametros: [],         // del bloque seleccionado
+  gigModo: "stomp",
+  matriz: null,
+  bus: null,
+  motor: null,            // última respuesta de /estado, para el menú
 };
 
-const CATEGORIAS = [
-  [/^amp/, "#FF6B5C", "amp"],
-  [/^cab/, "#B98CFF", "cab"],
-  [/^(nam|rtneural)/, "#E7E7EA", "neural"],
-  [/^(ts9sim|fuzz)/, "#FFA724", "overdrive"],
-  [/^echo/, "#3DD8D0", "echo"],
-  [/^freeverb/, "#3DD68C", "reverb"],
-  [/^chorus/, "#FF6FD8", "modulacion"],
-  [/^compressor/, "#8B93A8", "compresor"],
-  [/^eq/, "#5AA9FF", "eq"],
-  [/^(noise_gate|abgate)/, "#FFE066", "gate"],
-  [/wah/, "#7CE3A8", "wah"],
-];
+// -- Utilidades ----------------------------------------------------------------------------
 
-function categoria(id) {
-  for (const [re, color, icono] of CATEGORIAS) if (re.test(id)) return { color, icono };
-  return { color: "#4A4A55", icono: "generico" };
-}
-function colorNodo(id) { return categoria(id).color; }
-function iconoSvg(clave, claseExtra) {
-  return `<svg class="${claseExtra}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONOS[clave] || ICONOS.generico}</svg>`;
-}
-
-const LETRAS = ["A", "B", "C", "D", "E", "F", "G", "H"];
-function letra(i) {
-  return i < LETRAS.length ? LETRAS[i] : String.fromCharCode(65 + i); // I, J, ... si hiciera falta
-}
-// Colores para las escenas: no tienen "tipo" como una unidad del rack, así que se ciclan por
-// posición -- da variedad visual sin inventarle una categoría que no existe en el modelo.
-const COLORES_ESCENA = ["#FFA724", "#3DD8D0", "#B98CFF", "#3DD68C", "#FF6FD8", "#5AA9FF", "#FFE066", "#FF6B5C"];
-
-async function pedir(ruta, opciones) {
+async function api(ruta, cuerpo) {
+  const opciones = cuerpo === undefined ? {} : {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cuerpo),
+  };
   const resp = await fetch(ruta, opciones);
-  if (!resp.ok) {
-    const cuerpo = await resp.json().catch(() => ({}));
-    throw new Error(cuerpo.detail || `HTTP ${resp.status}`);
-  }
-  return resp.status === 204 ? null : resp.json();
+  const datos = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(datos.detail || `HTTP ${resp.status}`);
+  return datos;
+}
+const rutaLinea = () => `/lineas/${encodeURIComponent(estado.linea)}`;
+
+let tAviso = null;
+function aviso(texto, esError = false) {
+  $aviso.textContent = texto;
+  $aviso.className = "aviso" + (esError ? " error" : "");
+  $aviso.hidden = false;
+  clearTimeout(tAviso);
+  tAviso = setTimeout(() => { $aviso.hidden = true; }, 2200);
 }
 
-// -- Pestaña principal ----------------------------------------------------------------------
-
-for (const boton of document.querySelectorAll(".tab-principal")) {
-  boton.addEventListener("click", () => cambiarTabPrincipal(boton.dataset.tab));
-}
-
-async function cambiarTabPrincipal(tab) {
-  tabPrincipal = tab;
-  for (const boton of document.querySelectorAll(".tab-principal")) {
-    boton.classList.toggle("activo", boton.dataset.tab === tab);
-  }
-  $app.innerHTML = '<div class="cargando">Cargando…</div>';
-  try {
-    if (tab === "envios") {
-      if (!matriz) await cargarMatriz();
-    } else {
-      if (!lineas.length) await cargarLineas();
-      if (tab === "nodos") await cargarNodos();
-      else await cargarEstadoLinea(lineaActiva);
-    }
-  } catch (e) {
-    $app.innerHTML = `<div class="error-carga">No se pudo cargar: ${e.message}</div>`;
-    return;
-  }
-  renderContexto();
-  renderApp();
-}
-
-function renderContexto() {
-  $contexto.innerHTML = "";
-  $contexto.hidden = false;
-  const items = tabPrincipal === "envios" ? matriz.buses : lineas;
-  const activo = tabPrincipal === "envios" ? busActivo : lineaActiva;
-  for (const item of items) {
-    const chip = document.createElement("button");
-    chip.className = "chip-contexto" + (item === activo ? " activo" : "");
-    chip.textContent = item;
-    chip.addEventListener("click", async () => {
-      if (tabPrincipal === "envios") {
-        busActivo = item;
-      } else {
-        lineaActiva = item;
-        nodoSeleccionado = null;
-        $app.innerHTML = '<div class="cargando">Cargando…</div>';
-        try {
-          if (tabPrincipal === "nodos") await cargarNodos();
-          else await cargarEstadoLinea(lineaActiva);
-        } catch (e) {
-          $app.innerHTML = `<div class="error-carga">No se pudo cargar: ${e.message}</div>`;
-          return;
-        }
-      }
-      renderContexto();
-      renderApp();
-    });
-    $contexto.appendChild(chip);
-  }
-}
-
-function renderApp() {
-  $app.innerHTML = "";
-  $app.classList.remove("dos-columnas");
-  if (tabPrincipal === "nodos") renderNodos();
-  else if (tabPrincipal === "presets") renderPresets();
-  else if (tabPrincipal === "escenas") renderEscenas();
-  else renderEnvios();
-}
-
-async function cargarLineas() {
-  lineas = await pedir("/lineas");
-  if (!lineaActiva || !lineas.includes(lineaActiva)) lineaActiva = lineas[0];
-}
-
-// -- NODOS ------------------------------------------------------------------------------------
-
-async function cargarNodos() {
-  cadena = await pedir(`/lineas/${encodeURIComponent(lineaActiva)}/cadena`);
-  estadosOnOff = {};
-  if (cadena.length) {
-    const nombres = cadena.map((u) => `${u}.on_off`).join(",");
-    const valores = await pedir(`/lineas/${encodeURIComponent(lineaActiva)}/parametros?nombres=${encodeURIComponent(nombres)}`);
-    for (const u of cadena) estadosOnOff[u] = !!valores[`${u}.on_off`];
-  }
-  if (nodoSeleccionado && !cadena.includes(nodoSeleccionado)) nodoSeleccionado = null;
-}
-
-function renderNodos() {
-  if (!cadena.length) {
-    $app.innerHTML = '<div class="cargando">Esta línea no tiene unidades en la cadena.</div>';
-    return;
-  }
-
-  const fila = document.createElement("div");
-  fila.className = "cadena";
-  cadena.forEach((id, i) => {
-    if (i > 0) {
-      const conector = document.createElement("div");
-      conector.className = "nodo-conector";
-      fila.appendChild(conector);
-    }
-    const cat = categoria(id);
-    const nodo = document.createElement("button");
-    nodo.className = "nodo" + (estadosOnOff[id] ? " encendido" : "") +
-      (id === nodoSeleccionado ? " seleccionado" : "");
-    nodo.style.setProperty("--nodo-color", cat.color);
-    nodo.innerHTML = iconoSvg(cat.icono, "nodo-icono") +
-      `<span class="nodo-etiqueta">${escapeHtml(id)}</span>`;
-    nodo.addEventListener("click", () => seleccionarNodo(id));
-    fila.appendChild(nodo);
-  });
-  $app.appendChild(fila);
-
-  if (nodoSeleccionado) {
-    $app.appendChild(panelParametrosNodo());
-  }
-}
-
-async function seleccionarNodo(id) {
-  if (nodoSeleccionado === id) {
-    nodoSeleccionado = null;
-    renderApp();
-    return;
-  }
-  nodoSeleccionado = id;
-  try {
-    const cuerpo = await pedir(`/lineas/${encodeURIComponent(lineaActiva)}/unidad/${encodeURIComponent(id)}`);
-    parametrosNodo = cuerpo.parametros;
-  } catch (e) {
-    parametrosNodo = [];
-  }
-  renderApp();
-}
-
-function panelParametrosNodo() {
-  const panel = document.createElement("div");
-  panel.className = "panel-parametros";
-
-  const titulo = document.createElement("div");
-  titulo.className = "panel-titulo";
-  titulo.innerHTML = `<span class="panel-titulo-nombre">${escapeHtml(nodoSeleccionado)}</span>`;
-  const cerrar = document.createElement("button");
-  cerrar.className = "btn-cerrar-panel";
-  cerrar.textContent = "CERRAR";
-  cerrar.addEventListener("click", () => { nodoSeleccionado = null; renderApp(); });
-  titulo.appendChild(cerrar);
-  panel.appendChild(titulo);
-
-  if (!parametrosNodo.length) {
-    const vacio = document.createElement("div");
-    vacio.className = "mensaje-linea";
-    vacio.textContent = "Sin parámetros controlables desde acá.";
-    panel.appendChild(vacio);
-    return panel;
-  }
-
-  for (const p of parametrosNodo) {
-    if (p.tipo === "bool") {
-      panel.appendChild(controlToggle(p));
-    } else {
-      panel.appendChild(controlSliderParametro(p));
-    }
-  }
-  return panel;
-}
-
-function controlToggle(p) {
-  const fila = document.createElement("div");
-  fila.className = "control-fila";
-  const label = document.createElement("span");
-  label.className = "control-etiqueta";
-  label.textContent = p.etiqueta;
-  fila.appendChild(label);
-
-  const boton = document.createElement("button");
-  boton.className = "toggle" + (p.valor ? " activo" : "");
-  boton.textContent = p.valor ? "ON" : "OFF";
-  boton.addEventListener("click", async () => {
-    const nuevo = !p.valor;
-    p.valor = nuevo;
-    boton.className = "toggle" + (nuevo ? " activo" : "");
-    boton.textContent = nuevo ? "ON" : "OFF";
-    if (p.nombre.endsWith(".on_off")) {
-      estadosOnOff[nodoSeleccionado] = nuevo;
-      const nodoEl = $app.querySelector(".nodo.seleccionado");
-      if (nodoEl) nodoEl.classList.toggle("encendido", nuevo);
-    }
-    await enviarParametroLinea(p.nombre, nuevo ? 1 : 0);
-  });
-  fila.appendChild(boton);
-  return fila;
-}
-
-function controlSliderParametro(p) {
-  return controlSlider({
-    etiqueta: p.etiqueta,
-    valorInicial: p.valor,
-    min: p.min, max: p.max, step: p.paso || (p.max - p.min) / 100 || 0.01,
-    formatear: (v) => v.toFixed(2),
-    clase: "",
-    onCambio: (v) => enviarParametroLinea(p.nombre, v),
-  });
-}
-
-function enviarParametroLinea(nombre, valor) {
-  clearTimeout(temporizadores[nombre]);
-  temporizadores[nombre] = setTimeout(async () => {
-    try {
-      await pedir(`/lineas/${encodeURIComponent(lineaActiva)}/parametros`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pares: { [nombre]: valor } }),
-      });
-    } catch (e) {
-      marcarEstado(false, e.message);
-    }
-  }, 120);
-}
-
-// -- PRESETS / ESCENAS --------------------------------------------------------------------
-
-async function cargarEstadoLinea(nombre) {
-  estadoLinea = await pedir(`/lineas/${encodeURIComponent(nombre)}/estado`);
-}
-
-function metaLinea() {
-  return `BANCO ${estadoLinea.banco_visible + 1} · POSICIÓN ${estadoLinea.posicion_activa + 1}` +
-    (estadoLinea.tempo_bpm ? ` · ${estadoLinea.tempo_bpm} BPM` : "") +
-    (estadoLinea.escena_activa ? ` · ESCENA ${estadoLinea.escena_activa}` : "");
-}
-
-function renderPresets() {
-  const header = document.createElement("div");
-  header.className = "preset-header";
-  header.innerHTML = `<div class="preset-nombre">${escapeHtml(estadoLinea.preset)}</div>
-    <div class="preset-meta">${metaLinea()}</div>`;
-  $app.appendChild(header);
-
-  const mensaje = document.createElement("div");
-  mensaje.className = "mensaje-linea";
-  mensaje.id = "mensaje-linea";
-  $app.appendChild(mensaje);
-
-  const filaNav = document.createElement("div");
-  filaNav.className = "fila-botones";
-  filaNav.appendChild(botonAccion("ANTERIOR", "preset_anterior"));
-  filaNav.appendChild(botonAccion("SIGUIENTE", "preset_siguiente"));
-  $app.appendChild(filaNav);
-
-  const filaExtra = document.createElement("div");
-  filaExtra.className = "fila-botones";
-  filaExtra.appendChild(botonAccion("AFINADOR", "afinador"));
-  filaExtra.appendChild(botonAccion("TAP TEMPO", "tap_tempo", true));
-  $app.appendChild(filaExtra);
-}
-
-function renderEscenas() {
-  const header = document.createElement("div");
-  header.className = "preset-header";
-  header.innerHTML = `<div class="preset-nombre">${escapeHtml(estadoLinea.preset)}</div>
-    <div class="preset-meta">${metaLinea()}</div>`;
-  $app.appendChild(header);
-
-  if (!estadoLinea.escenas.length) {
-    const vacio = document.createElement("div");
-    vacio.className = "mensaje-linea";
-    vacio.textContent = "Este preset no tiene escenas.";
-    $app.appendChild(vacio);
-    return;
-  }
-
-  // Grid A-H: cada escena ocupa el tile de su posición en la lista, con letra/color/ícono/
-  // nombre -- pedido explícito el 25/09/2026, siguiendo el estilo de la pantalla STOMP de
-  // Cortex Control que se compartió como referencia (no el contenido: las escenas acá son
-  // variaciones de parámetros dentro de un preset, no unidades del rack -- por eso el ícono es
-  // uno solo genérico de "escena", y el color se cicla por posición en vez de por tipo).
-  const grid = document.createElement("div");
-  grid.className = "escenas-grid";
-  estadoLinea.escenas.forEach((nombre, i) => {
-    const activa = nombre === estadoLinea.escena_activa;
-    const color = COLORES_ESCENA[i % COLORES_ESCENA.length];
-    const tile = document.createElement("button");
-    tile.className = "escena-tile" + (activa ? " activa" : "");
-    tile.style.setProperty("--escena-color", color);
-    tile.innerHTML = `<span class="escena-letra">${letra(i)}</span>` +
-      iconoSvg("escena", "escena-icono") +
-      `<span class="escena-nombre">${escapeHtml(nombre)}</span>`;
-    tile.addEventListener("click", () => ejecutarAccion("escena", i));
-    grid.appendChild(tile);
-  });
-  $app.appendChild(grid);
-}
-
-function botonAccion(etiqueta, accion, acento) {
-  const boton = document.createElement("button");
-  boton.className = "btn-accion" + (acento ? " acento" : "");
-  boton.textContent = etiqueta;
-  boton.addEventListener("click", () => ejecutarAccion(accion, null));
-  return boton;
-}
-
-async function ejecutarAccion(accion, parametro) {
-  try {
-    const cuerpo = await pedir(`/lineas/${encodeURIComponent(lineaActiva)}/accion`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accion, parametro }),
-    });
-    estadoLinea = cuerpo;
-    renderApp();
-    const $m = document.getElementById("mensaje-linea");
-    if ($m) $m.textContent = cuerpo.mensaje || "";
-  } catch (e) {
-    const $m = document.getElementById("mensaje-linea");
-    if ($m) $m.textContent = e.message;
-  }
-}
-
-// -- ENVÍOS (mezcla) ------------------------------------------------------------------------
-
-async function cargarMatriz() {
-  matriz = await pedir("/mezclador/matriz");
-  if (!busActivo || !matriz.buses.includes(busActivo)) busActivo = matriz.buses[0];
-}
-
-function renderEnvios() {
-  $app.classList.add("dos-columnas");
-  const modoBus = matriz.modo_bus[busActivo];
-
-  const titulo = document.createElement("div");
-  titulo.className = "bus-titulo";
-  titulo.textContent = busActivo;
-  $app.appendChild(titulo);
-
-  const subtitulo = document.createElement("div");
-  subtitulo.className = "bus-subtitulo";
-  subtitulo.textContent = modoBus === "estereo" ? "Salida estéreo" : "Salida mono";
-  $app.appendChild(subtitulo);
-
-  for (const fuente of matriz.fuentes) {
-    $app.appendChild(tarjetaFuente(fuente));
-  }
-}
-
-function tarjetaFuente(fuente) {
-  const celda = matriz.matriz[fuente][busActivo];
-  const tarjeta = document.createElement("div");
-  tarjeta.className = "fuente";
-
-  const nombre = document.createElement("div");
-  nombre.className = "fuente-nombre";
-  nombre.textContent = fuente;
-  tarjeta.appendChild(nombre);
-
-  tarjeta.appendChild(controlSlider({
-    etiqueta: "VOL", valorInicial: celda.ganancia, min: 0, max: 2, step: 0.01,
-    formatear: (v) => v.toFixed(2), clase: "",
-    onCambio: (v) => enviarCambioMezcla("ganancia", fuente, busActivo, v),
-  }));
-  tarjeta.appendChild(controlSlider({
-    etiqueta: "PAN", valorInicial: celda.paneo, min: -1, max: 1, step: 0.01,
-    formatear: formatearPaneo, clase: "paneo",
-    onCambio: (v) => enviarCambioMezcla("paneo", fuente, busActivo, v),
-  }));
-  return tarjeta;
-}
-
-function formatearPaneo(v) {
-  if (Math.abs(v) < 0.01) return "C";
-  return Math.round(Math.abs(v) * 100) + (v < 0 ? "I" : "D");
-}
-
-function enviarCambioMezcla(campo, fuente, bus, valor) {
-  matriz.matriz[fuente][bus][campo] = valor;
-  const clave = `mezcla|${campo}|${fuente}|${bus}`;
+const temporizadores = {};
+function diferir(clave, fn, ms = 90) {
   clearTimeout(temporizadores[clave]);
-  temporizadores[clave] = setTimeout(async () => {
-    const ruta = campo === "ganancia" ? "/mezclador/ganancia" : "/mezclador/paneo";
-    try {
-      await pedir(ruta, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fuente, bus, valor }),
-      });
-    } catch (e) {
-      marcarEstado(false, e.message);
-    }
-  }, 120);
+  temporizadores[clave] = setTimeout(fn, ms);
 }
 
-// -- Controles genéricos --------------------------------------------------------------------
+const limitar = (v, a, b) => Math.min(b, Math.max(a, v));
 
-function controlSlider({ etiqueta, valorInicial, min, max, step, formatear, clase, onCambio }) {
-  const fila = document.createElement("div");
-  fila.className = "control-fila";
+function nuevo(tag, clase, html) {
+  const el = document.createElement(tag);
+  if (clase) el.className = clase;
+  if (html !== undefined) el.innerHTML = html;
+  return el;
+}
 
-  const label = document.createElement("span");
-  label.className = "control-etiqueta";
-  label.textContent = etiqueta;
-  fila.appendChild(label);
+// -- Carga de datos --------------------------------------------------------------------------
 
-  const input = document.createElement("input");
-  input.type = "range";
-  if (clase) input.className = clase;
-  input.min = String(min);
-  input.max = String(max);
-  input.step = String(step);
-  input.value = String(valorInicial);
-  fila.appendChild(input);
+async function cargarLinea() {
+  const [e, g] = await Promise.all([api(`${rutaLinea()}/estado`), api(`${rutaLinea()}/grid`)]);
+  estado.linea_estado = e;
+  estado.grid = g;
+  if (estado.seleccion && !unidadSeleccionada()) estado.seleccion = null;
+}
 
-  const valorTxt = document.createElement("span");
-  valorTxt.className = "control-valor";
-  valorTxt.textContent = formatear(valorInicial);
-  fila.appendChild(valorTxt);
+async function recargarGrid() {
+  estado.grid = await api(`${rutaLinea()}/grid`);
+  if (estado.seleccion && !unidadSeleccionada()) estado.seleccion = null;
+  if (estado.seleccion) await cargarParametros();
+}
 
-  input.addEventListener("input", () => {
-    const v = parseFloat(input.value);
-    valorTxt.textContent = formatear(v);
+async function cargarParametros() {
+  const s = estado.seleccion;
+  const r = await api(`${rutaLinea()}/unidad/${encodeURIComponent(s.id)}`);
+  estado.parametros = r.parametros;
+}
+
+function unidadSeleccionada() {
+  const s = estado.seleccion;
+  if (!s || !estado.grid) return null;
+  for (const fila of estado.grid.filas) {
+    const u = fila.unidades.find((x) => x.id === s.id);
+    if (u) return { ...u, estereo: fila.estereo };
+  }
+  return null;
+}
+
+/* `textoAviso(estadoNuevo)` arma el aviso en inglés -- los mensajes del controlador vienen en
+ * castellano (son los del display de la pedalera), la app es en inglés. */
+async function accion(nombre, parametro = null, textoAviso = null) {
+  try {
+    const r = await api(`${rutaLinea()}/accion`, { accion: nombre, parametro });
+    estado.linea_estado = r;
+    await recargarGrid().catch(() => {});
+    render();
+    if (textoAviso) aviso(textoAviso(r));
+  } catch (e) {
+    aviso(e.message, true);
+  }
+}
+
+async function cambiarLinea(linea) {
+  estado.linea = linea;
+  estado.seleccion = null;
+  estado.linea_estado = null;
+  estado.grid = null;
+  render();
+  try {
+    await cargarLinea();
+  } catch (e) {
+    mostrarErrorLinea(e.message);
+    return;
+  }
+  render();
+}
+
+// -- Render general ----------------------------------------------------------------------------
+
+function render() {
+  renderCabecera();
+  for (const b of document.querySelectorAll(".tab")) b.classList.toggle("activo", b.dataset.tab === estado.tab);
+  if (estado.tab === "grid") renderGrid();
+  else if (estado.tab === "presets") renderPresets();
+  else if (estado.tab === "gig") renderGig();
+  else renderSends();
+  renderPanel();
+}
+
+function renderCabecera() {
+  const e = estado.linea_estado;
+  $("cab-codigo").textContent = e ? `${e.banco_activo + 1}${LETRAS[e.posicion_activa] || ""}` : "–";
+  $("cab-preset").textContent = e ? e.preset : (estado.linea ? etiquetaLinea(estado.linea) : "Loading…");
+  const cont = $("cab-escenas");
+  cont.innerHTML = "";
+  if (!e) return;
+  e.escenas.forEach((nombre, i) => {
+    const b = nuevo("button", "letra-escena" + (nombre === e.escena_activa ? " activa" : ""), LETRAS[i] || "?");
+    b.type = "button";
+    b.title = nombre;
+    b.addEventListener("click", () => accion("escena", i));
+    cont.appendChild(b);
+  });
+}
+
+function mostrarErrorLinea(mensaje) {
+  $contenido.innerHTML = "";
+  const caja = nuevo("div", "mensaje-centro error");
+  const interior = nuevo("div");
+  interior.appendChild(nuevo("div", "", `${esc(etiquetaLinea(estado.linea))}: ${esc(mensaje)}`));
+  const opciones = nuevo("div", "segmentado");
+  opciones.style.marginTop = "14px";
+  for (const l of estado.lineas) {
+    const b = nuevo("button", l === estado.linea ? "activo" : "", esc(etiquetaLinea(l)));
+    b.addEventListener("click", () => cambiarLinea(l));
+    opciones.appendChild(b);
+  }
+  interior.appendChild(opciones);
+  caja.appendChild(interior);
+  $contenido.appendChild(caja);
+}
+
+// -- GRID ----------------------------------------------------------------------------------
+
+function renderGrid() {
+  $contenido.innerHTML = "";
+  const g = estado.grid;
+  if (!g) {
+    $contenido.appendChild(nuevo("div", "mensaje-centro", "Loading…"));
+    return;
+  }
+  const scroll = nuevo("div", "grid-scroll");
+  const lienzo = nuevo("div", "grid-lienzo");
+  const lineas = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  lineas.classList.add("grid-lineas");
+  lienzo.appendChild(lineas);
+
+  g.filas.forEach((fila, idx) => {
+    const f = nuevo("div", "fila");
+
+    if (idx === 0) {
+      const inBtn = nuevo("button", "extremo in", `In<small>${esc(etiquetaLinea(estado.linea))}</small>`);
+      inBtn.type = "button";
+      inBtn.addEventListener("click", () => menuInstrumento(inBtn));
+      f.appendChild(inBtn);
+    } else {
+      f.appendChild(nuevo("div", "extremo solo-texto", "Prev.<br>Row"));
+    }
+
+    for (const u of fila.unidades) {
+      const sel = estado.seleccion && estado.seleccion.id === u.id;
+      const b = nuevo("button", "bloque" + (u.encendido ? "" : " apagado") + (sel ? " seleccionado" : ""),
+        svg(cat(u.categoria).icono));
+      b.type = "button";
+      b.title = u.nombre;
+      b.style.setProperty("--color", cat(u.categoria).color);
+      b.addEventListener("click", () => seleccionarBloque(u.id, fila.estereo));
+      f.appendChild(b);
+    }
+
+    const mas = nuevo("button", "bloque mas", svg(ICONO_MAS));
+    mas.type = "button";
+    mas.title = fila.estereo ? "Add block (stereo row)" : "Add block (mono row)";
+    mas.addEventListener("click", () => abrirSelector(fila.estereo));
+    f.appendChild(mas);
+
+    f.appendChild(nuevo("div", "fila-relleno"));
+    f.appendChild(idx === 0
+      ? nuevo("div", "extremo solo-texto", "Row<small>2</small>")
+      : nuevo("div", "extremo solo-texto", "Out<small>1/2</small>"));
+    lienzo.appendChild(f);
+  });
+
+  scroll.appendChild(lienzo);
+  $contenido.appendChild(scroll);
+  requestAnimationFrame(() => dibujarLineas(lienzo, lineas));
+}
+
+/* Las líneas de conexión se miden de los elementos reales: la fila 1 va del "In" al "Row 2",
+ * vuelve por abajo y entra a la fila 2 después del "Prev. Row" -- el recorrido real de la señal
+ * (cadena mono -> cadena estéreo). Los bloques tapan la línea con su fondo negro. */
+function dibujarLineas(lienzo, lineasSvg) {
+  const base = lienzo.getBoundingClientRect();
+  const w = lienzo.scrollWidth;
+  const h = lienzo.scrollHeight;
+  lineasSvg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  lineasSvg.setAttribute("width", w);
+  lineasSvg.setAttribute("height", h);
+  const filas = lienzo.querySelectorAll(".fila");
+  const geo = [];
+  filas.forEach((f) => {
+    const ex = f.querySelectorAll(".extremo");
+    const izq = ex[0].getBoundingClientRect();
+    const der = ex[ex.length - 1].getBoundingClientRect();
+    const y = izq.top + izq.height / 2 - base.top;
+    geo.push({ x1: izq.right - base.left, x2: der.left - base.left, y });
+  });
+  let html = "";
+  geo.forEach((g) => { html += `<line x1="${g.x1}" y1="${g.y}" x2="${g.x2}" y2="${g.y}"/>`; });
+  if (geo.length === 2) {
+    const [a, b] = geo;
+    const jx = a.x2 - 16;
+    const medio = (a.y + b.y) / 2;
+    const entrada = b.x1 + 14;
+    const r = 10;
+    html += `<path d="M${jx} ${a.y} V${medio - r} Q${jx} ${medio} ${jx - r} ${medio} H${entrada + r} ` +
+      `Q${entrada} ${medio} ${entrada} ${medio + r} V${b.y}"/>`;
+    html += `<circle cx="${jx}" cy="${a.y}" r="4"/><circle cx="${entrada}" cy="${b.y}" r="4"/>`;
+  }
+  lineasSvg.innerHTML = html;
+}
+
+async function seleccionarBloque(id, estereo) {
+  if (estado.seleccion && estado.seleccion.id === id) {
+    estado.seleccion = null;
+    render();
+    return;
+  }
+  estado.seleccion = { id, estereo };
+  estado.parametros = [];
+  render();
+  try {
+    await cargarParametros();
+  } catch (e) {
+    aviso(e.message, true);
+  }
+  renderPanel();
+}
+
+// -- Panel del bloque (perillas) ------------------------------------------------------------
+
+function renderPanel() {
+  const u = estado.tab === "grid" ? unidadSeleccionada() : null;
+  if (!u) {
+    $panel.hidden = true;
+    $panel.innerHTML = "";
+    return;
+  }
+  const c = cat(u.categoria);
+  $panel.hidden = false;
+  $panel.innerHTML = "";
+  $panel.style.setProperty("--color", c.color);
+
+  const info = nuevo("div", "panel-info");
+  info.appendChild(nuevo("div", "panel-cabeza",
+    `<div class="icono-mini" style="--color:${c.color}">${svg(c.icono)}</div>` +
+    `<div class="panel-textos"><div class="panel-nombre">${esc(u.nombre)}</div>` +
+    `<div class="panel-cat">${esc(c.nombre)} · ${u.estereo ? "Stereo" : "Mono"}</div></div>`));
+
+  const acciones = nuevo("div", "panel-acciones");
+  const onoff = nuevo("button", "pildora" + (u.encendido ? " on" : ""), u.encendido ? "ON" : "BYPASS");
+  onoff.addEventListener("click", () => fijarEncendido(u, !u.encendido));
+  acciones.append(onoff);
+  // Los bloques fijos del motor (el Amp principal) no se pueden quitar: Guitarix se cae.
+  if (!u.fijo) {
+    const quitar = nuevo("button", "pildora peligro", "REMOVE");
+    quitar.addEventListener("click", () => quitarBloque(u));
+    acciones.append(quitar);
+  }
+  info.appendChild(acciones);
+  $panel.appendChild(info);
+
+  const perillas = nuevo("div", "panel-perillas");
+  const controles = estado.parametros.filter((p) => !p.nombre.endsWith(".on_off"));
+  if (!controles.length) {
+    perillas.appendChild(nuevo("div", "vacio", estado.parametros.length ? "No adjustable parameters." : "Loading…"));
+  }
+  for (const p of controles) {
+    if (p.tipo === "bool") {
+      perillas.appendChild(crearInterruptor(p, c.color));
+    } else if (p.min !== null && p.max !== null) {
+      perillas.appendChild(crearPerilla({
+        valor: Number(p.valor), min: p.min, max: p.max, etiqueta: etiquetaLegible(p.etiqueta), color: c.color,
+        formatear: (v) => formatoValor(v, p.min, p.max),
+        onCambio: (v) => { p.valor = v; enviarParametro(p.nombre, v); },
+      }));
+    }
+  }
+  $panel.appendChild(perillas);
+}
+
+/* Cuando el motor no trae nombre legible, la etiqueta es el id crudo ("gain1", "wet_dry"). */
+function etiquetaLegible(texto) {
+  const t = String(texto);
+  if (/^wet_?dry$/i.test(t)) return "Mix";
+  return t.replace(/_/g, " ").replace(/^([a-z]+)\d$/i, "$1");
+}
+
+function formatoValor(v, min, max) {
+  const rango = max - min;
+  if (rango <= 2) return v.toFixed(2);
+  if (rango <= 40) return v.toFixed(1);
+  return String(Math.round(v));
+}
+
+function enviarParametro(nombre, valor) {
+  diferir(nombre, async () => {
+    try {
+      await api(`${rutaLinea()}/parametros`, { pares: { [nombre]: valor } });
+    } catch (e) {
+      aviso(e.message, true);
+    }
+  });
+}
+
+async function fijarEncendido(u, encendido) {
+  try {
+    await api(`${rutaLinea()}/parametros`, { pares: { [`${u.id}.on_off`]: encendido ? 1 : 0 } });
+    await recargarGrid();
+    render();
+  } catch (e) {
+    aviso(e.message, true);
+  }
+}
+
+async function quitarBloque(u) {
+  try {
+    estado.grid = await api(`${rutaLinea()}/grid/quitar`, { unidad: u.id, estereo: u.estereo });
+    estado.seleccion = null;
+    render();
+    aviso(`${u.nombre} removed`);
+  } catch (e) {
+    aviso(e.message, true);
+  }
+}
+
+function crearInterruptor(p, color) {
+  const cont = nuevo("div", "interruptor");
+  cont.style.setProperty("--color", color);
+  const b = nuevo("button", p.valor ? "on" : "", p.valor ? "ON" : "OFF");
+  b.addEventListener("click", () => {
+    p.valor = p.valor ? 0 : 1;
+    b.className = p.valor ? "on" : "";
+    b.textContent = p.valor ? "ON" : "OFF";
+    enviarParametro(p.nombre, p.valor);
+  });
+  cont.append(b, nuevo("div", "perilla-etiqueta", esc(etiquetaLegible(p.etiqueta))));
+  return cont;
+}
+
+/* Perilla: arco de 270°, se arrastra en vertical (arriba = más). Rueda del mouse también. */
+function puntoPolar(angulo) {
+  const rad = (angulo - 90) * Math.PI / 180;
+  return [30 + 25 * Math.cos(rad), 30 + 25 * Math.sin(rad)];
+}
+function arco(a0, a1) {
+  if (Math.abs(a1 - a0) < 0.5) return "";
+  const [x0, y0] = puntoPolar(Math.min(a0, a1));
+  const [x1, y1] = puntoPolar(Math.max(a0, a1));
+  const grande = Math.abs(a1 - a0) > 180 ? 1 : 0;
+  return `M${x0.toFixed(2)} ${y0.toFixed(2)} A25 25 0 ${grande} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+}
+
+function crearPerilla({ valor, min, max, etiqueta, color, bipolar = false, formatear, onCambio }) {
+  const el = nuevo("div", "perilla");
+  if (color) el.style.setProperty("--color", color);
+  el.innerHTML = svg(
+    `<path class="pista" d="${arco(-135, 135)}"/><path class="arco" d=""/>` +
+    `<circle class="cuerpo" cx="30" cy="30" r="17"/><line class="aguja" x1="30" y1="30" x2="30" y2="16"/>`,
+    "0 0 60 60") +
+    `<div class="perilla-valor"></div><div class="perilla-etiqueta">${esc(etiqueta)}</div>`;
+  const $arco = el.querySelector(".arco");
+  const $aguja = el.querySelector(".aguja");
+  const $valor = el.querySelector(".perilla-valor");
+  let v = limitar(Number.isFinite(valor) ? valor : min, min, max);
+
+  function pintar() {
+    const t = (v - min) / (max - min || 1);
+    const ang = -135 + 270 * t;
+    const desde = bipolar ? 0 : -135;
+    $arco.setAttribute("d", arco(desde, ang));
+    $aguja.setAttribute("transform", `rotate(${ang} 30 30)`);
+    $valor.textContent = formatear(v);
+  }
+  pintar();
+
+  let y0 = 0;
+  let v0 = 0;
+  el.addEventListener("pointerdown", (ev) => {
+    el.setPointerCapture(ev.pointerId);
+    y0 = ev.clientY;
+    v0 = v;
+  });
+  el.addEventListener("pointermove", (ev) => {
+    if (!el.hasPointerCapture(ev.pointerId)) return;
+    v = limitar(v0 + (y0 - ev.clientY) / 170 * (max - min), min, max);
+    pintar();
     onCambio(v);
   });
-
-  return fila;
+  el.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    v = limitar(v - Math.sign(ev.deltaY) * (max - min) / 100, min, max);
+    pintar();
+    onCambio(v);
+  }, { passive: false });
+  return el;
 }
 
-function escapeHtml(s) {
-  const d = document.createElement("div");
-  d.textContent = s ?? "";
-  return d.innerHTML;
-}
+// -- Selector "+" (categorías -> modelos) ------------------------------------------------------
 
-// -- Barra de estado del motor (comun a las 4 pestañas) ------------------------------------
-
-function marcarEstado(ok, texto) {
-  $dot.className = "dot" + (ok ? " ok" : "");
-  $txtEstado.textContent = texto;
-}
-
-async function actualizarEstadoMotor() {
+async function abrirSelector(estereo) {
+  let catalogo;
   try {
-    const datos = await pedir("/estado");
-    marcarEstado(true, `Arquitec DSP ${Array.isArray(datos.version) ? datos.version[2] : datos.version}`);
-    $txtCpu.textContent = `CPU ${Number(datos.carga_cpu).toFixed(1)}%`;
+    catalogo = await api(`${rutaLinea()}/plugins`);
   } catch (e) {
-    marcarEstado(false, "Sin conexión");
-    $txtCpu.textContent = "";
+    aviso(e.message, true);
+    return;
+  }
+  const categorias = catalogo.categorias
+    .map((c) => ({ ...c, plugins: c.plugins.filter((p) => p.estereo === estereo) }))
+    .filter((c) => c.plugins.length);
+  mostrarCapa(true);
+  $selector.hidden = false;
+  mostrarCategorias(categorias, estereo);
+}
+
+function cabeceraSelector(titulo, alVolver) {
+  const cab = nuevo("div", "selector-cabeza");
+  if (alVolver) {
+    const volver = nuevo("button", "flecha", svg('<path d="M15 5l-7 7 7 7"/>'));
+    volver.addEventListener("click", alVolver);
+    cab.appendChild(volver);
+  }
+  cab.appendChild(nuevo("div", "titulo", esc(titulo)));
+  const cerrar = nuevo("button", "flecha", svg('<path d="M6 6l12 12M18 6 6 18"/>'));
+  cerrar.addEventListener("click", cerrarCapas);
+  cab.appendChild(cerrar);
+  return cab;
+}
+
+function mostrarCategorias(categorias, estereo) {
+  $selector.innerHTML = "";
+  $selector.appendChild(cabeceraSelector(estereo ? "Add block · Stereo row" : "Add block · Mono row"));
+  const cuerpo = nuevo("div", "selector-cuerpo");
+  const leyenda = nuevo("div", "leyenda");
+  for (const c of categorias) {
+    const info = cat(c.id);
+    const b = nuevo("button", "item-leyenda",
+      `<div class="icono-mini" style="--color:${info.color}">${svg(info.icono)}</div>` +
+      `<div>${esc(info.nombre)}<small>${c.plugins.length} model${c.plugins.length === 1 ? "" : "s"}</small></div>`);
+    b.addEventListener("click", () => mostrarModelos(c, categorias, estereo));
+    leyenda.appendChild(b);
+  }
+  cuerpo.appendChild(leyenda);
+  $selector.appendChild(cuerpo);
+}
+
+function mostrarModelos(c, categorias, estereo) {
+  const info = cat(c.id);
+  $selector.innerHTML = "";
+  $selector.appendChild(cabeceraSelector(info.nombre, () => mostrarCategorias(categorias, estereo)));
+  const cuerpo = nuevo("div", "selector-cuerpo");
+  const lista = nuevo("div", "lista-modelos");
+  for (const p of c.plugins) {
+    const b = nuevo("button", "item-modelo",
+      `<div class="icono-mini" style="--color:${info.color}">${svg(info.icono)}</div>` +
+      `<div>${esc(p.nombre)}<small>${p.en_cadena ? "Already in grid" : esc(p.id)}</small></div>`);
+    b.disabled = p.en_cadena;
+    b.addEventListener("click", () => insertarBloque(p, estereo));
+    lista.appendChild(b);
+  }
+  cuerpo.appendChild(lista);
+  $selector.appendChild(cuerpo);
+}
+
+async function insertarBloque(p, estereo) {
+  try {
+    estado.grid = await api(`${rutaLinea()}/grid/insertar`, { unidad: p.id, estereo });
+    cerrarCapas();
+    aviso(`${p.nombre} added`);
+    await seleccionarBloque(p.id, estereo);
+  } catch (e) {
+    aviso(e.message, true);
+  }
+}
+
+// -- Capas: velo / popover ------------------------------------------------------------------
+
+function mostrarCapa(visible) {
+  $velo.hidden = !visible;
+}
+function cerrarCapas() {
+  $velo.hidden = true;
+  $popover.hidden = true;
+  $selector.hidden = true;
+  $selector.innerHTML = "";
+}
+$velo.addEventListener("click", cerrarCapas);
+
+function abrirPopover(ancla, items, pie) {
+  $popover.innerHTML = "";
+  for (const it of items) {
+    const b = nuevo("button", "", esc(it.texto) + (it.marca ? '<span class="marca">●</span>' : ""));
+    b.addEventListener("click", () => { cerrarCapas(); it.accion(); });
+    $popover.appendChild(b);
+  }
+  if (pie) $popover.appendChild(nuevo("div", "estado-linea", esc(pie)));
+  mostrarCapa(true);
+  $popover.hidden = false;
+  const r = ancla.getBoundingClientRect();
+  const w = $popover.offsetWidth;
+  const h = $popover.offsetHeight;
+  let x = r.left;
+  let y = r.bottom + 6;
+  if (x + w > innerWidth - 8) x = innerWidth - w - 8;
+  if (y + h > innerHeight - 8) y = Math.max(8, r.top - h - 6);
+  $popover.style.left = `${Math.max(8, x)}px`;
+  $popover.style.top = `${y}px`;
+}
+
+function menuInstrumento(ancla) {
+  abrirPopover(ancla, estado.lineas.map((l) => ({
+    texto: etiquetaLinea(l),
+    marca: l === estado.linea,
+    accion: () => { if (l !== estado.linea) cambiarLinea(l); },
+  })));
+}
+
+function textoMotor() {
+  const m = estado.motor;
+  if (!m) return "Engine offline";
+  const v = Array.isArray(m.version) ? m.version[2] : m.version;
+  return `Arquitec DSP ${v} · CPU ${Number(m.carga_cpu).toFixed(1)}%`;
+}
+
+// -- PRESETS ---------------------------------------------------------------------------------
+
+function renderPresets() {
+  $contenido.innerHTML = "";
+  const e = estado.linea_estado;
+  if (!e) { $contenido.appendChild(nuevo("div", "mensaje-centro", "Loading…")); return; }
+  const pantalla = nuevo("div", "pantalla-tiles");
+
+  const barra = nuevo("div", "barra-sub");
+  const ant = nuevo("button", "flecha", svg('<path d="M15 5l-7 7 7 7"/>'));
+  const sig = nuevo("button", "flecha", svg('<path d="M9 5l7 7-7 7"/>'));
+  ant.disabled = sig.disabled = e.total_bancos < 2;
+  ant.addEventListener("click", () => accion("banco_anterior"));
+  sig.addEventListener("click", () => accion("banco_siguiente"));
+  barra.append(ant, nuevo("div", "titulo", `Bank ${e.banco_visible + 1}<small>${esc(e.banco_visible_nombre)}</small>`), sig);
+  pantalla.appendChild(barra);
+
+  const tiles = nuevo("div", "tiles");
+  for (let i = 0; i < 8; i++) {
+    const nombre = e.presets_banco_visible[i];
+    const codigo = `${e.banco_visible + 1}${LETRAS[i]}`;
+    const activo = e.banco_visible === e.banco_activo && i === e.posicion_activa;
+    const t = nuevo("button", "tile-preset" + (activo ? " activo" : "") + (nombre ? "" : " vacio"),
+      `<span class="codigo">${codigo}</span><span class="nombre">${nombre ? esc(nombre) : "—"}</span>`);
+    if (nombre) t.addEventListener("click", () => accion("preset_en_banco", i));
+    tiles.appendChild(t);
+  }
+  pantalla.appendChild(tiles);
+  $contenido.appendChild(pantalla);
+}
+
+// -- GIG -------------------------------------------------------------------------------------
+
+function switchesStomp() {
+  const e = estado.linea_estado;
+  const enGrid = {};
+  for (const fila of (estado.grid ? estado.grid.filas : [])) {
+    for (const u of fila.unidades) enGrid[u.id] = u;
+  }
+  if (e.stomps.length) {
+    return e.stomps.slice(0, 8).map((s, i) => ({
+      nombre: enGrid[s.unidad] ? enGrid[s.unidad].nombre : s.etiqueta,
+      categoria: s.categoria,
+      on: s.activo,
+      fueraDeGrid: s.en_cadena === false,
+      pisar: () => accion("toggle_stomp", i),
+    }));
+  }
+  const unidades = [];
+  for (const fila of (estado.grid ? estado.grid.filas : [])) {
+    for (const u of fila.unidades) unidades.push({ ...u, estereo: fila.estereo });
+  }
+  return unidades.slice(0, 8).map((u) => ({
+    nombre: u.nombre,
+    categoria: u.categoria,
+    on: u.encendido,
+    fueraDeGrid: false,
+    pisar: () => fijarEncendido(u, !u.encendido),
+  }));
+}
+
+function renderGig() {
+  $contenido.innerHTML = "";
+  const e = estado.linea_estado;
+  if (!e) { $contenido.appendChild(nuevo("div", "mensaje-centro", "Loading…")); return; }
+  const pantalla = nuevo("div", "pantalla-tiles");
+
+  const barra = nuevo("div", "barra-sub");
+  const seg = nuevo("div", "segmentado");
+  for (const [modo, texto] of [["stomp", "STOMP"], ["scene", "SCENE"]]) {
+    const b = nuevo("button", estado.gigModo === modo ? "activo" : "", texto);
+    b.addEventListener("click", () => { estado.gigModo = modo; render(); });
+    seg.appendChild(b);
+  }
+  barra.appendChild(seg);
+  barra.appendChild(nuevo("div", "indicacion",
+    estado.gigModo === "stomp" ? `${esc(etiquetaLinea(estado.linea))} · tap to bypass`
+      : `${esc(etiquetaLinea(estado.linea))} · ${e.escena_activa ? esc(e.escena_activa) : "no scene"}`));
+  pantalla.appendChild(barra);
+
+  const tiles = nuevo("div", "tiles");
+  if (estado.gigModo === "stomp") {
+    const sw = switchesStomp();
+    if (!sw.length) tiles.appendChild(nuevo("div", "mensaje-centro", "No blocks in the grid yet."));
+    sw.forEach((s, i) => {
+      const c = cat(s.categoria);
+      const t = nuevo("button", "tile " + (s.on && !s.fueraDeGrid ? "on" : "off"),
+        `<div class="tile-icono">${svg(c.icono)}</div><div class="tile-letra">${LETRAS[i]}</div>` +
+        `<div class="tile-nombre">${esc(s.nombre)}${s.fueraDeGrid ? '<span class="tile-nota">Not in grid</span>' : ""}</div>`);
+      t.style.setProperty("--color", c.color);
+      t.addEventListener("click", () => {
+        if (s.fueraDeGrid) { aviso("Add this block in GRID first", true); return; }
+        s.pisar();
+      });
+      tiles.appendChild(t);
+    });
+  } else {
+    e.escenas.forEach((nombre, i) => {
+      const color = COLORES_ESCENA[i % COLORES_ESCENA.length];
+      const t = nuevo("button", "tile " + (nombre === e.escena_activa ? "on" : "off"),
+        `<div class="tile-icono">${svg(ICONO_ESCENA)}</div><div class="tile-letra">${LETRAS[i]}</div>` +
+        `<div class="tile-nombre">${esc(nombre)}</div>`);
+      t.style.setProperty("--color", color);
+      t.addEventListener("click", () => accion("escena", i));
+      tiles.appendChild(t);
+    });
+    if (e.escenas.length < 8) {
+      const mas = nuevo("button", "tile agregar", `<div>${svg(ICONO_MAS)}<span>New scene ${LETRAS[e.escenas.length]}</span></div>`);
+      mas.addEventListener("click", nuevaEscena);
+      tiles.appendChild(mas);
+    }
+  }
+  pantalla.appendChild(tiles);
+  $contenido.appendChild(pantalla);
+}
+
+async function nuevaEscena() {
+  try {
+    estado.linea_estado = await api(`${rutaLinea()}/escenas`, {});
+    render();
+    const e = estado.linea_estado;
+    aviso(`Scene ${LETRAS[e.escenas.length - 1]} created from current sound`);
+  } catch (e) {
+    aviso(e.message, true);
+  }
+}
+
+// -- SENDS -------------------------------------------------------------------------------------
+
+async function renderSends() {
+  $contenido.innerHTML = "";
+  if (!estado.matriz) {
+    $contenido.appendChild(nuevo("div", "mensaje-centro", "Loading…"));
+    try {
+      estado.matriz = await api("/mezclador/matriz");
+      if (!estado.bus || !estado.matriz.buses.includes(estado.bus)) estado.bus = estado.matriz.buses[0];
+    } catch (e) {
+      $contenido.innerHTML = "";
+      $contenido.appendChild(nuevo("div", "mensaje-centro error", `Sends unavailable: ${esc(e.message)}`));
+      return;
+    }
+    if (estado.tab !== "sends") return;
+    $contenido.innerHTML = "";
+  }
+  const m = estado.matriz;
+  const pantalla = nuevo("div", "pantalla-tiles");
+
+  const barra = nuevo("div", "barra-sub");
+  const seg = nuevo("div", "segmentado");
+  for (const bus of m.buses) {
+    const b = nuevo("button", bus === estado.bus ? "activo" : "", esc(etiquetaBus(bus)));
+    b.addEventListener("click", () => { estado.bus = bus; render(); });
+    seg.appendChild(b);
+  }
+  barra.appendChild(seg);
+  barra.appendChild(nuevo("div", "indicacion", m.modo_bus[estado.bus] === "estereo" ? "STEREO OUT" : "MONO OUT"));
+  pantalla.appendChild(barra);
+
+  const consola = nuevo("div", "consola");
+  for (const fuente of m.fuentes) {
+    const celda = m.matriz[fuente][estado.bus];
+    const canal = nuevo("div", "canal");
+    canal.appendChild(nuevo("div", "canal-nombre", esc(etiquetaLinea(fuente))));
+    canal.appendChild(crearPerilla({
+      valor: celda.paneo, min: -1, max: 1, etiqueta: "Pan", color: "#60A5FA", bipolar: true,
+      formatear: (v) => (Math.abs(v) < 0.01 ? "C" : `${Math.round(Math.abs(v) * 100)}${v < 0 ? "L" : "R"}`),
+      onCambio: (v) => { celda.paneo = v; enviarMezcla("paneo", fuente, v); },
+    }));
+    const db = nuevo("div", "canal-db", formatoDb(celda.ganancia));
+    canal.appendChild(crearFader(celda.ganancia, (g) => {
+      celda.ganancia = g;
+      db.textContent = formatoDb(g);
+      enviarMezcla("ganancia", fuente, g);
+    }));
+    canal.appendChild(db);
+    consola.appendChild(canal);
+  }
+  pantalla.appendChild(consola);
+  $contenido.appendChild(pantalla);
+}
+
+function formatoDb(g) {
+  if (g <= 0.0005) return "-∞ dB";
+  const db = 20 * Math.log10(g);
+  return `${db > 0.05 ? "+" : ""}${db.toFixed(1)} dB`;
+}
+
+function enviarMezcla(campo, fuente, valor) {
+  const bus = estado.bus;
+  diferir(`mezcla|${campo}|${fuente}|${bus}`, async () => {
+    try {
+      await api(campo === "ganancia" ? "/mezclador/ganancia" : "/mezclador/paneo", { fuente, bus, valor });
+    } catch (e) {
+      aviso(e.message, true);
+    }
+  });
+}
+
+/* Fader vertical, ganancia lineal 0..2 (unidad = mitad del recorrido, marcada con una línea). */
+function crearFader(valor, onCambio) {
+  const el = nuevo("div", "fader",
+    '<div class="fader-pista"></div><div class="fader-nivel"></div><div class="fader-cero"></div><div class="fader-perilla"></div>');
+  const $nivel = el.querySelector(".fader-nivel");
+  const $perilla = el.querySelector(".fader-perilla");
+  el.querySelector(".fader-cero").style.bottom = "calc(6px + (100% - 12px) * 0.5)";
+  let g = limitar(valor, 0, 2);
+  function pintar() {
+    const pos = g / 2;
+    $perilla.style.bottom = `calc(6px + (100% - 12px) * ${pos})`;
+    $nivel.style.height = `calc((100% - 12px) * ${pos})`;
+  }
+  pintar();
+  function desdeEvento(ev) {
+    const r = el.getBoundingClientRect();
+    const pos = 1 - (ev.clientY - r.top - 6) / (r.height - 12);
+    g = limitar(pos, 0, 1) * 2;
+    if (Math.abs(g - 1) < 0.03) g = 1;    // imán en 0 dB
+    pintar();
+    onCambio(g);
+  }
+  el.addEventListener("pointerdown", (ev) => { el.setPointerCapture(ev.pointerId); desdeEvento(ev); });
+  el.addEventListener("pointermove", (ev) => { if (el.hasPointerCapture(ev.pointerId)) desdeEvento(ev); });
+  return el;
+}
+
+// -- Cabecera y tabs: eventos -------------------------------------------------------------------
+
+$("btn-prev").addEventListener("click", () => accion("preset_anterior"));
+$("btn-next").addEventListener("click", () => accion("preset_siguiente"));
+$("btn-guardar").addEventListener("click", async () => {
+  try {
+    estado.linea_estado = await api(`${rutaLinea()}/guardar`, {});
+    render();
+    aviso(`Saved: ${estado.linea_estado.preset}`);
+  } catch (e) {
+    aviso(e.message, true);
+  }
+});
+$("btn-menu").addEventListener("click", (ev) => {
+  abrirPopover(ev.currentTarget, [
+    { texto: "Tuner", accion: () => accion("afinador", null, () => "Tuner on") },
+    { texto: "Tap Tempo", accion: () => accion("tap_tempo", null, (r) => (r.tempo_bpm ? `Tempo ${Math.round(r.tempo_bpm)} BPM` : "Tap again…")) },
+  ], textoMotor());
+});
+for (const b of document.querySelectorAll(".tab")) {
+  b.addEventListener("click", () => {
+    estado.tab = b.dataset.tab;
+    if (estado.tab !== "grid") estado.seleccion = null;
+    render();
+  });
+}
+addEventListener("resize", () => diferir("resize", () => { if (estado.tab === "grid") renderGrid(); }, 120));
+
+// -- Estado del motor (punto del menú) ---------------------------------------------------------
+
+async function actualizarMotor() {
+  const punto = $("punto-estado");
+  try {
+    estado.motor = await api("/estado");
+    punto.className = "punto-estado ok";
+  } catch (e) {
+    estado.motor = null;
+    punto.className = "punto-estado error";
   }
 }
 
 async function iniciar() {
-  $dot.className = "dot espera";
-  await cambiarTabPrincipal("nodos");
-  actualizarEstadoMotor();
-  setInterval(actualizarEstadoMotor, 5000);
+  try {
+    estado.lineas = await api("/lineas");
+  } catch (e) {
+    $contenido.innerHTML = `<div class="mensaje-centro error">Can't reach the system: ${esc(e.message)}</div>`;
+    return;
+  }
+  estado.linea = estado.lineas[0];
+  await cambiarLinea(estado.linea);
+  actualizarMotor();
+  setInterval(actualizarMotor, 5000);
 }
-
-// Deliberadamente NO se registra ningún service worker mientras el proyecto está en
-// desarrollo activo -- ver el docstring de sw.js (que sigue sirviéndose, autodestructivo, para
-// limpiar cualquier instalación vieja de un navegador que ya lo tenga puesto).
 
 iniciar();

@@ -37,7 +37,7 @@
           "parametros": { "amp.stage1.gain": 0.65 },
           "tempo_bpm": 120,
           "stomps": [
-            { "etiqueta": "TS", "unidad": "tubescreamer", "activo": true }
+            { "etiqueta": "TS", "unidad": "ts9sim", "activo": true }
           ]
         },
         {
@@ -49,7 +49,7 @@
           "tempo_bpm": 120,
           "volumen": 1.0,
           "stomps": [
-            { "etiqueta": "BOOST", "unidad": "tubescreamer", "activo": true },
+            { "etiqueta": "BOOST", "unidad": "ts9sim", "activo": true },
             { "etiqueta": "VERB", "unidad": "freeverb", "activo": true }
           ],
           "notas": "Sin preset base de Guitarix: parte del estado actual del motor."

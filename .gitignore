@@ -6,6 +6,9 @@ models/irs/*
 !models/aidax/.gitkeep
 !models/irs/.gitkeep
 
+# Setlists de trabajo (las escribe el botón de guardar de la app; el ejemplo sí va al repo)
+presets/setlists/
+
 # Python
 __pycache__/
 *.pyc
