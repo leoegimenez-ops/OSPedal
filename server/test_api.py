@@ -42,6 +42,7 @@ class GXFalso:
         self.eventos_pendientes = []
         self.falla_conectar = False
         self.falla_version = None  # GuitarixError, si se quiere simular un error del motor
+        self.falla_conexion = False  # simula que el socket se corto a mitad de pedido
         GXFalso.instancias.append(self)
 
     def conectar(self):
@@ -53,6 +54,8 @@ class GXFalso:
         self.conectado = False
 
     def version(self):
+        if self.falla_conexion:
+            raise ConnectionError("se perdió la conexión (simulada)")
         if self.falla_version:
             raise self.falla_version
         return [1, 1, "0.47.0"]
@@ -68,6 +71,21 @@ class GXFalso:
 
     def presets(self, banco):
         return ["Clean", "Lead"]
+
+    def orden_rack(self, cadena=0):
+        return ["ampstack", "freeverb"] if cadena == 0 else []
+
+    def consultar_unidad(self, unidad):
+        if unidad == "ampstack":
+            return {
+                "ampstack.on_off": {"name": "on/off", "type": "bool", "value": {"ampstack.on_off": 1}},
+                "ampstack.position": {"name": "", "type": "int", "lower_bound": -9999,
+                                       "upper_bound": 9999, "value": {"ampstack.position": 27}},
+                "amp2.stage1.Pregain": {"name": "Pregain", "type": "float", "lower_bound": -20,
+                                         "upper_bound": 20, "step": 0.1,
+                                         "value": {"amp2.stage1.Pregain": -6}},
+            }
+        return {}
 
     def set_preset(self, banco, preset):
         self.llamadas.append(("setpreset", banco, preset))
@@ -337,6 +355,56 @@ check("400 accion desconocida (no 500)", r.status_code == 400, f"-> {r.status_co
 r = client.post("/lineas/guitarra1/accion", json={"accion": "cambiar_preset"})
 check("400 sin el parametro que la accion necesita (no 500)",
       r.status_code == 400 and "índice" in r.json()["detail"], f"-> {r.status_code} {r.text}")
+
+print("\n16. GET /lineas/{linea}/cadena y /unidad/{unidad} (editor de nodos)")
+reset()
+r = client.get("/lineas/guitarra1/cadena")
+check("200 y la cadena real", r.status_code == 200 and r.json() == ["ampstack", "freeverb"],
+      f"-> {r.status_code} {r.json() if r.status_code == 200 else r.text}")
+
+r = client.get("/lineas/guitarra1/unidad/ampstack")
+check("200", r.status_code == 200, f"-> {r.status_code} {r.text}")
+cuerpo = r.json()
+nombres_param = [p["nombre"] for p in cuerpo["parametros"]]
+check("filtra 'position' (type int, no renderizable)",
+      "ampstack.position" not in nombres_param, f"-> {nombres_param}")
+check("incluye el bool on_off y el float Pregain",
+      "ampstack.on_off" in nombres_param and "amp2.stage1.Pregain" in nombres_param,
+      f"-> {nombres_param}")
+pregain = next(p for p in cuerpo["parametros"] if p["nombre"] == "amp2.stage1.Pregain")
+check("trae min/max/valor del float", (pregain["min"], pregain["max"], pregain["valor"]) == (-20, 20, -6),
+      f"-> {pregain}")
+
+r = client.get("/lineas/guitarra1/unidad/no_existe")
+check("404 unidad sin parametros", r.status_code == 404, f"-> {r.status_code} {r.text}")
+
+print("\n17. GET/POST /lineas/{linea}/parametros")
+reset()
+r = client.get("/lineas/guitarra1/parametros", params={"nombres": "amp.gain, eq.peak1"})
+check("200 junta por coma", r.status_code == 200 and r.json() == {"amp.gain": 1.0, "eq.peak1": 1.0},
+      f"-> {r.status_code} {r.json() if r.status_code == 200 else r.text}")
+r = client.get("/lineas/guitarra1/parametros", params={"nombres": ""})
+check("400 nombres vacio", r.status_code == 400, f"-> {r.status_code}")
+
+r = client.post("/lineas/guitarra1/parametros", json={"pares": {"amp.gain": 0.8}})
+check("200 y llega al motor de ESA linea", r.status_code == 200 and
+      GXFalso.instancias[0].llamadas == [("set", "amp.gain", 0.8)], f"-> {GXFalso.instancias[0].llamadas}")
+
+print("\n18. Reconexion automatica: GuitarixError -> 502, ConnectionError -> 503 (no 500)")
+reset()
+r = client.get("/estado")  # instancia la fake
+api._gx.falla_version = api.GuitarixError(-32601, "Method not found")
+r = client.get("/estado")
+check("502 con GuitarixError", r.status_code == 502 and "Method not found" in r.text,
+      f"-> {r.status_code} {r.text}")
+
+reset()
+r = client.get("/estado")
+api._gx.falla_version = None
+api._gx.falla_conexion = True
+r = client.get("/estado")
+check("503 con ConnectionError (no 500)", r.status_code == 503 and "perdió la conexión" in r.text,
+      f"-> {r.status_code} {r.text}")
 
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

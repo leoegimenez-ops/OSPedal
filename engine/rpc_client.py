@@ -17,6 +17,12 @@ real corriendo (22/09/2026, ver docs/guitarix-integracion.md):
    responde `"id": "1"`). `llamar()` compara con `str()` en ambos lados por esto.
 4. `getversion` no devuelve un string simple: devuelve un array `[major, minor, "version_completa"]`,
    por ejemplo `[1, 1, "0.47.0"]`.
+
+Además: si Guitarix se cae mientras hay una conexión abierta, `_enviar()`/`_leer_linea()`
+detectan el socket muerto y llaman a `cerrar()` antes de propagar `ConnectionError` -- así la
+próxima llamada a `conectar()` reconecta de verdad en vez de quedarse pegada a un socket
+inservible (bug real, confirmado 24-25/09/2026: un Guitarix caído de noche dejaba la API
+devolviendo 500 sin fin hasta reiniciar el proceso entero).
 """
 
 from __future__ import annotations
@@ -112,14 +118,40 @@ class GuitarixRPC:
         if self._sock is None:
             raise ConnectionError("No hay conexión con Guitarix. Llamar a conectar() primero.")
         crudo = json.dumps(mensaje, separators=(",", ":")).encode("utf-8") + b"\n"
-        self._sock.sendall(crudo)
+        try:
+            self._sock.sendall(crudo)
+        except TimeoutError:
+            raise
+        except OSError as exc:
+            # Si Guitarix se cae (crash, kill, reinicio), el socket queda muerto pero seguía
+            # asignado en self._sock -- conectar() no reintentaba nunca porque su guarda
+            # "if self._sock is not None: return" no distinguía "conectado" de "conectado a un
+            # socket ya muerto". cerrar() acá es lo que hace que la próxima llamada a
+            # conectar() reconecte de verdad en vez de quedarse pegada. Confirmado en vivo
+            # (24-25/09/2026): Guitarix se cayó de noche y la API devolvía 500 sin fin hasta
+            # reiniciar el proceso entero -- inaceptable para un show en vivo.
+            #
+            # TimeoutError se excluye a propósito: es subclase de OSError pero NO significa que
+            # el socket esté muerto -- es el mecanismo normal de `eventos()` para saber "no hay
+            # más eventos por ahora" con un timeout acotado (`socket.settimeout`). Tratarlo como
+            # desconexión real rompía eventos() por completo (bug propio, encontrado por la
+            # batería de tests de este mismo cambio -- ver engine/test_rpc_client.py sección 4).
+            self.cerrar()
+            raise ConnectionError(f"Se perdió la conexión con Guitarix: {exc}") from exc
 
     def _leer_linea(self) -> dict[str, Any]:
         if self._sock is None:
             raise ConnectionError("No hay conexión con Guitarix.")
         while b"\n" not in self._buffer:
-            trozo = self._sock.recv(4096)
+            try:
+                trozo = self._sock.recv(4096)
+            except TimeoutError:
+                raise
+            except OSError as exc:
+                self.cerrar()
+                raise ConnectionError(f"Se perdió la conexión con Guitarix: {exc}") from exc
             if not trozo:
+                self.cerrar()
                 raise ConnectionError("Guitarix cerró la conexión.")
             self._buffer += trozo
         linea, self._buffer = self._buffer.split(b"\n", 1)
@@ -262,8 +294,16 @@ class GuitarixRPC:
     def plugins(self) -> Any:
         return self.llamar("pluginlist")
 
-    def orden_rack(self) -> Any:
-        return self.llamar("get_rack_unit_order")
+    def orden_rack(self, cadena: int = 0) -> Any:
+        """Ids de unidad en el orden real del rack. `cadena`: 0 = mono (la que usan las líneas
+        de instrumento), 1 = estéreo. El parámetro es obligatorio para el motor -- llamarlo sin
+        argumentos da `-32602 Invalid param -- int expected` (confirmado en vivo, 23/09/2026)."""
+        return self.llamar("get_rack_unit_order", cadena)
+
+    def consultar_unidad(self, unidad: str) -> Any:
+        """Metadatos de los parámetros de una unidad (rango, tipo, grupo, valor actual) --
+        `queryunit`. Es lo que arma los knobs de un bloque en el editor de nodos."""
+        return self.llamar("queryunit", unidad)
 
     def archivos(self, categoria: str) -> Any:
         """Llama a `get_file_list`. Existe en la tabla de métodos RPC pero no

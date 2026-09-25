@@ -58,7 +58,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -176,6 +177,25 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="PedalSistema", lifespan=lifespan)
 
+
+@app.exception_handler(GuitarixError)
+async def _manejar_error_guitarix(_request: Request, exc: GuitarixError) -> JSONResponse:
+    """El motor respondió, pero con un error RPC -- distinto de perder la conexión."""
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+
+@app.exception_handler(ConnectionError)
+async def _manejar_desconexion(_request: Request, exc: ConnectionError) -> JSONResponse:
+    """Se cae la conexión a mitad de un pedido (Guitarix crasheó, se mató el proceso, etc.).
+
+    Antes esto no lo atrapaba nada y daba 500 -- confirmado en vivo (24-25/09/2026): un Guitarix
+    caído de noche dejó la API respondiendo 500 sin fin hasta reiniciar el proceso entero. Ahora
+    `GuitarixRPC._enviar()`/`_leer_linea()` cierran el socket muerto al detectar el corte, así que
+    el *próximo* pedido reconecta solo -- éste todavía da un error, pero uno limpio (503), y el
+    de después ya puede andar de nuevo sin que nadie reinicie nada a mano.
+    """
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
 # La PWA de control remoto (mobile/) se sirve desde esta misma app, montada bajo /app -- así una
 # ruta relativa como fetch("/estado") funciona igual en local que atrás de un túnel público, sin
 # tener que hardcodear ningún host. El prefijo /app no choca con ninguna ruta de la API (todas
@@ -224,53 +244,37 @@ def salud() -> dict:
 @app.get("/estado")
 def estado() -> dict:
     gx = _motor()
-    try:
-        return {
-            "version": gx.version(),
-            "estado": gx.estado(),
-            "carga_cpu": gx.carga_cpu(),
-        }
-    except GuitarixError as exc:
-        raise HTTPException(502, str(exc))
+    return {
+        "version": gx.version(),
+        "estado": gx.estado(),
+        "carga_cpu": gx.carga_cpu(),
+    }
 
 
 @app.get("/bancos")
 def bancos() -> Any:
-    gx = _motor()
-    try:
-        return gx.bancos()
-    except GuitarixError as exc:
-        raise HTTPException(502, str(exc))
+    return _motor().bancos()
 
 
 @app.get("/bancos/{banco}/presets")
 def presets(banco: str) -> Any:
-    gx = _motor()
-    try:
-        return gx.presets(banco)
-    except GuitarixError as exc:
-        raise HTTPException(502, str(exc))
+    return _motor().presets(banco)
 
 
 @app.post("/preset")
 def cambiar_preset(datos: CambiarPreset) -> dict:
     """Notificación pura hacia Guitarix (sin round-trip): ver `GuitarixRPC.set_preset`."""
-    gx = _motor()
-    gx.set_preset(datos.banco, datos.preset)
+    _motor().set_preset(datos.banco, datos.preset)
     return {"ok": True}
 
 
 @app.get("/parametros")
 def obtener_parametros(nombres: str) -> Any:
     """`nombres` separados por coma: `/parametros?nombres=amp.gain,eq.peak1`."""
-    gx = _motor()
     lista = [n.strip() for n in nombres.split(",") if n.strip()]
     if not lista:
         raise HTTPException(400, "nombres vacío")
-    try:
-        return gx.obtener(*lista)
-    except GuitarixError as exc:
-        raise HTTPException(502, str(exc))
+    return _motor().obtener(*lista)
 
 
 @app.post("/parametros")
@@ -372,6 +376,72 @@ def ejecutar_accion(linea: str, datos: EjecutarAccion) -> dict:
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"mensaje": mensaje, **_estado_linea(ctrl)}
+
+
+@app.get("/lineas/{linea}/parametros")
+def obtener_parametros_linea(linea: str, nombres: str) -> Any:
+    """Como `/parametros`, pero contra el Guitarix de esta línea en particular -- necesario
+    porque con varias líneas ya no hay un único motor "el" Guitarix."""
+    lista = [n.strip() for n in nombres.split(",") if n.strip()]
+    if not lista:
+        raise HTTPException(400, "nombres vacío")
+    return _linea(linea).rpc.obtener(*lista)
+
+
+@app.post("/lineas/{linea}/parametros")
+def fijar_parametros_linea(linea: str, datos: FijarParametros) -> dict:
+    ctrl = _linea(linea)
+    pares: list[Any] = []
+    for nombre, valor in datos.pares.items():
+        pares.extend((nombre, valor))
+    try:
+        ctrl.rpc.fijar(*pares)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+_TIPOS_RENDERIZABLES = frozenset({"float", "bool"})
+
+
+def _parametros_unidad(crudo: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reordena la respuesta de `queryunit` a una lista simple de controles para el editor de
+    nodos. Solo `float` (sliders) y `bool` (toggles) -- filtra a propósito cosas como
+    `<unidad>.position` (coordenadas de la GUI de escritorio de Guitarix, no un parámetro de
+    audio) o `<unidad>.pp`/`.s_h` (selectores pre/post y sample&hold: son `int` pero su valor
+    real es un string como `"pre"`, no un número -- necesitan un control propio, no un slider;
+    confirmado en vivo el 25/09/2026, queda para una iteración futura, no v1)."""
+    parametros = []
+    for nombre, meta in crudo.items():
+        if meta.get("type") not in _TIPOS_RENDERIZABLES:
+            continue
+        parametros.append({
+            "nombre": nombre,
+            "etiqueta": meta.get("name") or nombre.rsplit(".", 1)[-1],
+            "tipo": meta["type"],
+            "min": meta.get("lower_bound"),
+            "max": meta.get("upper_bound"),
+            "paso": meta.get("step"),
+            "valor": meta.get("value", {}).get(nombre),
+        })
+    return parametros
+
+
+@app.get("/lineas/{linea}/cadena")
+def cadena_linea(linea: str) -> list[str]:
+    """Ids de unidad en el orden real del rack (cadena mono -- la única que usan las líneas de
+    instrumento hoy) -- arma la fila de bloques del editor de nodos."""
+    return _linea(linea).rpc.orden_rack(0)
+
+
+@app.get("/lineas/{linea}/unidad/{unidad}")
+def unidad_linea(linea: str, unidad: str) -> dict:
+    """Parámetros controlables de una unidad del rack (`queryunit`, reordenado) -- arma los
+    knobs cuando se toca un bloque en el editor de nodos."""
+    crudo = _linea(linea).rpc.consultar_unidad(unidad)
+    if not crudo:
+        raise HTTPException(404, f"unidad desconocida o sin parámetros: {unidad!r}")
+    return {"unidad": unidad, "parametros": _parametros_unidad(crudo)}
 
 
 def _proximo_evento(gx: GuitarixRPC) -> dict | None:
