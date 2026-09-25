@@ -559,8 +559,8 @@ async function iniciar() {
   setInterval(actualizarEstadoMotor, 5000);
 }
 
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").catch(() => {});
-}
+// Deliberadamente NO se registra ningún service worker mientras el proyecto está en
+// desarrollo activo -- ver el docstring de sw.js (que sigue sirviéndose, autodestructivo, para
+// limpiar cualquier instalación vieja de un navegador que ya lo tenga puesto).
 
 iniciar();
