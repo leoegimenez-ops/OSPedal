@@ -259,8 +259,9 @@ function renderGrid() {
         svg(cat(u.categoria).icono));
       b.type = "button";
       b.title = u.nombre;
+      b.dataset.id = u.id;
       b.style.setProperty("--color", cat(u.categoria).color);
-      b.addEventListener("click", () => seleccionarBloque(u.id, fila.estereo));
+      habilitarArrastre(b, f, fila.estereo, () => seleccionarBloque(u.id, fila.estereo));
       f.appendChild(b);
     }
 
@@ -314,6 +315,101 @@ function dibujarLineas(lienzo, lineasSvg) {
     html += `<circle cx="${jx}" cy="${a.y}" r="4"/><circle cx="${entrada}" cy="${b.y}" r="4"/>`;
   }
   lineasSvg.innerHTML = html;
+}
+
+/* Arrastrar para reordenar. Un toque corto selecciona (abre perillas); si el dedo se mueve más
+ * de 8 px, el bloque se levanta: un "fantasma" sigue al dedo y el original queda como hueco
+ * que se corre entre los demás bloques de SU fila. Al soltar se manda el orden nuevo al
+ * servidor, que reordena el rack y renumera el audio -- el cambio suena, no es solo visual.
+ * Mono y estéreo son cadenas distintas del motor: un bloque no pasa de una fila a la otra. */
+function habilitarArrastre(el, fila, estereo, alTocar) {
+  let inicio = null;
+  let fantasma = null;
+  let ordenInicial = null;
+
+  const idsFila = () => [...fila.querySelectorAll(".bloque[data-id]")].map((b) => b.dataset.id);
+
+  // Los eventos se escuchan en `window`, no con setPointerCapture: mover el bloque dentro del
+  // DOM (para correr el hueco) le hace perder la captura al navegador, y desde ahí ni el
+  // movimiento ni el soltar le llegaban -- el arrastre quedaba colgado a mitad de camino.
+  const alMover = (ev) => mover(ev);
+  const alSoltar = (ev) => terminar(ev, false);
+  const alCancelar = (ev) => terminar(ev, true);
+
+  el.addEventListener("pointerdown", (ev) => {
+    if (ev.button > 0) return;
+    inicio = { x: ev.clientX, y: ev.clientY, id: ev.pointerId };
+    addEventListener("pointermove", alMover);
+    addEventListener("pointerup", alSoltar);
+    addEventListener("pointercancel", alCancelar);
+  });
+
+  function mover(ev) {
+    if (!inicio || ev.pointerId !== inicio.id) return;
+    const dx = ev.clientX - inicio.x;
+    const dy = ev.clientY - inicio.y;
+    if (!fantasma) {
+      if (Math.hypot(dx, dy) < 8) return;
+      ordenInicial = idsFila();
+      const r = el.getBoundingClientRect();
+      fantasma = el.cloneNode(true);
+      fantasma.classList.add("fantasma");
+      fantasma.style.width = `${r.width}px`;
+      fantasma.style.height = `${r.height}px`;
+      fantasma.style.left = `${r.left}px`;
+      fantasma.style.top = `${r.top}px`;
+      document.body.appendChild(fantasma);
+      el.classList.add("hueco-arrastre");
+      fila.classList.add("fila-arrastre");
+      inicio.left = r.left;
+      inicio.top = r.top;
+    }
+    fantasma.style.transform = `translate(${dx}px, ${dy}px) scale(1.08)`;
+    // ¿Delante de qué bloque cae? El primero cuyo centro queda a la derecha del dedo.
+    const otros = [...fila.querySelectorAll(".bloque[data-id]")].filter((b) => b !== el);
+    const destino = otros.find((b) => {
+      const r = b.getBoundingClientRect();
+      return ev.clientX < r.left + r.width / 2;
+    });
+    const mas = fila.querySelector(".bloque.mas");
+    const referencia = destino || mas;
+    if (referencia && el.nextElementSibling !== referencia) fila.insertBefore(el, referencia);
+    // Auto-scroll horizontal cerca de los bordes (filas largas en el celular).
+    const scroll = fila.closest(".grid-scroll");
+    if (scroll) {
+      const rs = scroll.getBoundingClientRect();
+      if (ev.clientX < rs.left + 40) scroll.scrollLeft -= 12;
+      else if (ev.clientX > rs.right - 40) scroll.scrollLeft += 12;
+    }
+  }
+
+  async function terminar(ev, cancelado) {
+    if (!inicio || ev.pointerId !== inicio.id) return;
+    inicio = null;
+    removeEventListener("pointermove", alMover);
+    removeEventListener("pointerup", alSoltar);
+    removeEventListener("pointercancel", alCancelar);
+    if (!fantasma) {
+      if (!cancelado) alTocar();
+      return;
+    }
+    fantasma.remove();
+    fantasma = null;
+    el.classList.remove("hueco-arrastre");
+    fila.classList.remove("fila-arrastre");
+    const orden = idsFila();
+    if (cancelado || orden.join() === ordenInicial.join()) {
+      renderGrid();
+      return;
+    }
+    try {
+      estado.grid = await api(`${rutaLinea()}/grid/ordenar`, { estereo, orden });
+      aviso("Order changed");
+    } catch (e) {
+      aviso(e.message, true);
+    }
+    render();
+  }
 }
 
 async function seleccionarBloque(id, estereo) {
@@ -590,6 +686,239 @@ function cerrarCapas() {
   $popover.hidden = true;
   $selector.hidden = true;
   $selector.innerHTML = "";
+  if (!$modal.hidden) {
+    $modal.hidden = true;
+    $modal.innerHTML = "";
+    const alCerrar = modalAlCerrar;
+    modalAlCerrar = null;
+    if (alCerrar) alCerrar();
+  }
+}
+
+// -- Ventanas flotantes (Tuner / Tempo) ---------------------------------------------------------
+
+const $modal = $("modal");
+let modalAlCerrar = null;
+
+function abrirModal(titulo, extrasCabeza, cuerpo, alCerrar) {
+  cerrarCapas();
+  $modal.innerHTML = "";
+  const cab = nuevo("div", "modal-cabeza");
+  cab.appendChild(nuevo("div", "modal-titulo", esc(titulo)));
+  const extras = nuevo("div", "modal-extras");
+  for (const x of extrasCabeza) extras.appendChild(x);
+  cab.appendChild(extras);
+  const cerrar = nuevo("button", "modal-cerrar", svg('<path d="M6 6l12 12M18 6 6 18"/>'));
+  cerrar.setAttribute("aria-label", "Close");
+  cerrar.addEventListener("click", cerrarCapas);
+  cab.appendChild(cerrar);
+  $modal.append(cab, cuerpo);
+  modalAlCerrar = alCerrar || null;
+  mostrarCapa(true);
+  $modal.hidden = false;
+}
+
+// Afinador: el motor de la línea analiza el tono; la app lo consulta ~10 veces por segundo y
+// calcula nota y cents con su referencia (La4, 440 Hz por defecto, ajustable).
+const NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const NOTAS_DOBLE = ["C", "C#/Db", "D", "D#/Eb", "E", "F", "F#/Gb", "G", "G#/Ab", "A", "A#/Bb", "B"];
+const ICONO_PARLANTE = '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.5 4.5 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/>';
+const ICONO_MUDO = '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>';
+
+function leerPreferencia(clave, porDefecto) {
+  try {
+    const v = localStorage.getItem(clave);
+    return v === null ? porDefecto : JSON.parse(v);
+  } catch (e) {
+    return porDefecto;
+  }
+}
+function guardarPreferencia(clave, valor) {
+  try { localStorage.setItem(clave, JSON.stringify(valor)); } catch (e) { /* sin storage: no pasa nada */ }
+}
+
+function abrirAfinador() {
+  let linea = estado.linea;
+  let referencia = leerPreferencia("afinador.referencia", 440);
+  let mudo = false;
+  let cents = 0;
+  let activo = true;
+  let tPoll = null;
+
+  const selector = nuevo("select", "modal-select");
+  for (const l of estado.lineas) {
+    const o = nuevo("option", "", esc(etiquetaLinea(l)));
+    o.value = l;
+    o.selected = l === linea;
+    selector.appendChild(o);
+  }
+  const btnMudo = nuevo("button", "modal-icono", svg(ICONO_PARLANTE));
+  btnMudo.title = "Mute output while tuning";
+
+  const cuerpo = nuevo("div", "afinador");
+  cuerpo.innerHTML = `
+    <div class="af-escala"><span>-50</span><span class="af-flecha izq">${svg('<path d="M9 5l7 7-7 7"/>')}</span>
+      <span class="af-cents">–</span><span class="af-flecha der">${svg('<path d="M15 5l-7 7 7 7"/>')}</span><span>+50</span></div>
+    <div class="af-pista"><div class="af-marca"></div><div class="af-punto"></div></div>
+    <div class="af-notas"><span class="af-vecina izq">–</span><span class="af-nota">–</span><span class="af-vecina der">–</span></div>
+    <div class="af-pie"><span class="af-hz">No signal</span>
+      <div class="af-ref"><span>A4</span><button class="menos" aria-label="Lower reference">−</button>
+      <span class="af-ref-valor"></span><button class="mas" aria-label="Raise reference">+</button></div></div>`;
+  const q = (s) => cuerpo.querySelector(s);
+
+  const enviar = (extra = {}) => api(`/lineas/${encodeURIComponent(linea)}/afinador`,
+    { activo: true, silenciar: mudo, referencia, ...extra }).catch((e) => aviso(e.message, true));
+
+  function pintarRef() { q(".af-ref-valor").textContent = `${referencia.toFixed(1)} Hz`; }
+  function cambiarRef(paso) {
+    referencia = Math.round(limitar(referencia + paso, 400, 480) * 10) / 10;
+    guardarPreferencia("afinador.referencia", referencia);
+    pintarRef();
+    diferir("afinador.ref", () => enviar(), 200);
+  }
+  q(".menos").addEventListener("click", () => cambiarRef(-1));
+  q(".mas").addEventListener("click", () => cambiarRef(1));
+  btnMudo.addEventListener("click", () => {
+    mudo = !mudo;
+    btnMudo.innerHTML = svg(mudo ? ICONO_MUDO : ICONO_PARLANTE);
+    btnMudo.classList.toggle("activo", mudo);
+    enviar();
+  });
+  selector.addEventListener("change", () => {
+    api(`/lineas/${encodeURIComponent(linea)}/afinador`, { activo: false, silenciar: false }).catch(() => {});
+    linea = selector.value;
+    enviar();
+  });
+
+  function pintar(frecuencia) {
+    const punto = q(".af-punto");
+    if (!(frecuencia > 20 && frecuencia < 5000)) {
+      cuerpo.classList.remove("afinado", "cerca");
+      cuerpo.classList.add("sin-senal");
+      q(".af-nota").textContent = "–";
+      q(".af-vecina.izq").textContent = q(".af-vecina.der").textContent = "";
+      q(".af-cents").textContent = "–";
+      q(".af-hz").textContent = "No signal";
+      punto.style.left = "50%";
+      return;
+    }
+    cuerpo.classList.remove("sin-senal");
+    const n = 12 * Math.log2(frecuencia / referencia) + 69;
+    const cercana = Math.round(n);
+    const c = (n - cercana) * 100;
+    cents = Math.abs(c - cents) > 30 ? c : cents * 0.6 + c * 0.4;   // suaviza sin arrastrar saltos
+    const idx = ((cercana % 12) + 12) % 12;
+    q(".af-nota").innerHTML = `${NOTAS[idx]}<sub>${Math.floor(cercana / 12) - 1}</sub>`;
+    q(".af-vecina.izq").textContent = NOTAS_DOBLE[(idx + 11) % 12];
+    q(".af-vecina.der").textContent = NOTAS_DOBLE[(idx + 1) % 12];
+    q(".af-cents").textContent = `${cents >= 0 ? "+" : ""}${cents.toFixed(1)}`;
+    q(".af-hz").textContent = `${frecuencia.toFixed(1)} Hz`;
+    punto.style.left = `${50 + limitar(cents, -50, 50)}%`;
+    cuerpo.classList.toggle("afinado", Math.abs(cents) <= 3);
+    cuerpo.classList.toggle("cerca", Math.abs(cents) > 3 && Math.abs(cents) <= 15);
+    q(".af-flecha.izq").classList.toggle("on", cents < -3);   // bajo: subir
+    q(".af-flecha.der").classList.toggle("on", cents > 3);    // alto: bajar
+  }
+
+  async function sondear() {
+    if (!activo) return;
+    try {
+      const r = await api(`/lineas/${encodeURIComponent(linea)}/afinador`);
+      if (activo) pintar(r.frecuencia);
+    } catch (e) {
+      if (activo) q(".af-hz").textContent = "Engine offline";
+    }
+    if (activo) tPoll = setTimeout(sondear, 100);
+  }
+
+  pintarRef();
+  pintar(0);
+  abrirModal("Tuner", [selector, btnMudo], cuerpo, () => {
+    activo = false;
+    clearTimeout(tPoll);
+    // sendBeacon: llega aunque la página se esté cerrando -- nunca dejar la salida muda.
+    const url = `/lineas/${encodeURIComponent(linea)}/afinador`;
+    const datos = JSON.stringify({ activo: false, silenciar: false });
+    const enviado = navigator.sendBeacon && navigator.sendBeacon(url, new Blob([datos], { type: "application/json" }));
+    if (!enviado) api(url, { activo: false, silenciar: false }).catch(() => {});
+  });
+  enviar().then(sondear);
+}
+
+// Tempo: TAP (promedio de los últimos 4 intervalos, se reinicia tras 2 s sin tocar), +/- y
+// slider. Mueve los delays del GRID. "Preset" se guarda con 💾; "Global" es para toda la banda.
+function abrirTempo() {
+  let bpm = Math.round((estado.linea_estado && estado.linea_estado.tempo_bpm) || 120);
+  let alcance = leerPreferencia("tempo.alcance", "preset");
+  let taps = [];
+
+  const cuerpo = nuevo("div", "tempo");
+  cuerpo.innerHTML = `
+    <div class="segmentado tempo-alcance"><button data-a="global">Global</button><button data-a="preset">Preset</button></div>
+    <p class="tempo-ayuda"></p>
+    <div class="tempo-fila">
+      <button class="tempo-tap">TAP</button>
+      <div class="tempo-bpm"><span class="tempo-numero"></span><span class="tempo-led"></span></div>
+      <div class="tempo-pasos"><button class="menos" aria-label="Slower">−</button><button class="mas" aria-label="Faster">+</button></div>
+    </div>
+    <div class="tempo-slider"><input type="range" min="40" max="250" step="1">
+      <div class="tempo-marcas"><span style="left:9.5%">60</span><span style="left:28.6%">100</span><span style="left:38.1%">120</span><span style="left:66.7%">180</span></div></div>
+    <p class="tempo-nota">Delays in the grid follow this tempo.</p>`;
+  const q = (s) => cuerpo.querySelector(s);
+  const slider = q("input");
+
+  function pintar() {
+    q(".tempo-numero").textContent = String(bpm);
+    slider.value = String(limitar(bpm, 40, 250));
+    q(".tempo-led").style.animationDuration = `${60 / bpm}s`;
+    for (const b of cuerpo.querySelectorAll(".tempo-alcance button")) b.classList.toggle("activo", b.dataset.a === alcance);
+    q(".tempo-ayuda").textContent = alcance === "preset"
+      ? "The tempo is saved when the preset is saved. Each preset can have its own tempo."
+      : "Sets the same tempo on every instrument (GTR 1, GTR 2, BASS, VOX).";
+  }
+  function fijar(nuevoBpm, inmediato = false) {
+    bpm = Math.round(limitar(nuevoBpm, 40, 250));
+    pintar();
+    diferir("tempo", async () => {
+      try {
+        const r = await api(`${rutaLinea()}/tempo`, { bpm, alcance });
+        estado.linea_estado = r;
+        if (r.saltadas && r.saltadas.length) aviso(`Offline, not changed: ${r.saltadas.map(etiquetaLinea).join(", ")}`, true);
+      } catch (e) {
+        aviso(e.message, true);
+      }
+    }, inmediato ? 0 : 150);
+  }
+
+  for (const b of cuerpo.querySelectorAll(".tempo-alcance button")) {
+    b.addEventListener("click", () => {
+      alcance = b.dataset.a;
+      guardarPreferencia("tempo.alcance", alcance);
+      pintar();
+      fijar(bpm, true);
+    });
+  }
+  q(".menos").addEventListener("click", () => fijar(bpm - 1));
+  q(".mas").addEventListener("click", () => fijar(bpm + 1));
+  slider.addEventListener("input", () => fijar(Number(slider.value)));
+  q(".tempo-tap").addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    const ahora = performance.now() / 1000;
+    if (taps.length && ahora - taps[taps.length - 1] > 2) taps = [];
+    taps.push(ahora);
+    taps = taps.slice(-5);
+    const boton = q(".tempo-tap");
+    boton.classList.remove("pulso");
+    void boton.offsetWidth;
+    boton.classList.add("pulso");
+    if (taps.length < 2) return;
+    const intervalos = taps.slice(1).map((t, i) => t - taps[i]);
+    const promedio = intervalos.reduce((a, b) => a + b, 0) / intervalos.length;
+    fijar(60 / promedio, true);
+  });
+
+  pintar();
+  abrirModal("Tempo", [], cuerpo, null);
 }
 $velo.addEventListener("click", cerrarCapas);
 
@@ -869,8 +1198,8 @@ $("btn-guardar").addEventListener("click", async () => {
 });
 $("btn-menu").addEventListener("click", (ev) => {
   abrirPopover(ev.currentTarget, [
-    { texto: "Tuner", accion: () => accion("afinador", null, () => "Tuner on") },
-    { texto: "Tap Tempo", accion: () => accion("tap_tempo", null, (r) => (r.tempo_bpm ? `Tempo ${Math.round(r.tempo_bpm)} BPM` : "Tap again…")) },
+    { texto: "Tuner", accion: abrirAfinador },
+    { texto: `Tempo · ${Math.round((estado.linea_estado && estado.linea_estado.tempo_bpm) || 120)} BPM`, accion: abrirTempo },
   ], textoMotor());
 });
 for (const b of document.querySelectorAll(".tab")) {
@@ -880,6 +1209,8 @@ for (const b of document.querySelectorAll(".tab")) {
     render();
   });
 }
+// Cerrar la pestaña/app con el afinador abierto: apagarlo y des-silenciar igual.
+addEventListener("pagehide", () => { if (!$modal.hidden) cerrarCapas(); });
 addEventListener("resize", () => diferir("resize", () => { if (estado.tab === "grid") renderGrid(); }, 120));
 
 // -- Estado del motor (punto del menú) ---------------------------------------------------------

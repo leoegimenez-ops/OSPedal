@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 
-from engine.categorias import fijos
+from engine.categorias import fijos, pares_tempo
 from engine.midi_engine import Accion
 from presets.preset_manager import (
     CADENAS, MAX_ESCENAS, MAX_PRESETS, PRESETS_POR_BANCO, Escena, Preset, Setlist, valor_rpc,
@@ -122,6 +122,26 @@ class ControladorEscenario:
             for nombre, valor in valores.items():
                 planos += [nombre, valor]
             self.rpc.fijar(*planos)
+        if incluir_base and self.tempo_bpm:
+            self._aplicar_tempo()
+
+    # -- Tempo --------------------------------------------------------------------------
+
+    def fijar_tempo(self, bpm: float) -> None:
+        """BPM elegido a mano (ventana Tempo): queda como tempo del preset activo -- se guarda
+        en disco con el botón 💾, como en la referencia ("cada preset tiene su BPM") -- y lleva
+        los delays del rack a ese tempo."""
+        if not 24 <= bpm <= 360:
+            raise ValueError(f"Tempo fuera de rango (24-360 BPM): {bpm}")
+        self.tempo_bpm = round(float(bpm), 1)
+        self.preset.tempo_bpm = self.tempo_bpm
+        self._aplicar_tempo()
+
+    def _aplicar_tempo(self) -> None:
+        unidades = [u for est in CADENAS.values() for u in self.rpc.orden_rack(est)]
+        pares = pares_tempo(unidades, self.tempo_bpm)
+        if pares:
+            self.rpc.fijar(*pares)
 
     def _sincronizar_cadena(self, cadena: dict[str, list[str]]) -> None:
         """Deja el rack con exactamente los bloques guardados en el preset, en ese orden.
@@ -147,12 +167,38 @@ class ControladorEscenario:
             for unidad in actual:
                 if unidad not in fijas:
                     self.rpc.quitar_unidad(unidad, bool(estereo))
-            presentes_fijas = [u for u in actual if u in fijas]
-            for i, unidad in enumerate(objetivo):
-                if unidad in fijas:
-                    continue
-                antes_de = next((u for u in objetivo[i + 1:] if u in presentes_fijas), "")
-                self.rpc.insertar_unidad(unidad, antes_de, bool(estereo))
+            self._colocar(estereo, objetivo, [u for u in actual if u in fijas])
+
+    def _colocar(self, estereo: int, objetivo: list[str], presentes_fijas: list[str]) -> None:
+        """Inserta (o mueve: `insert_rack_unit` sobre una unidad ya presente la mueve,
+        `GxSettings::insert_rack_unit`) cada bloque no fijo, en orden, delante del próximo fijo
+        que le sigue en `objetivo`. Procesarlos en orden deja cada tramo entre fijos ordenado.
+        Después renumera: sin eso el audio no sigue el nuevo orden (ver GuitarixRPC.renumerar).
+        Un fijo guardado en el preset pero ausente del rack se descarta: insertarlo tumba al motor.
+        """
+        fijas = self._unidades_fijas()
+        objetivo = [u for u in objetivo if u not in fijas or u in presentes_fijas]
+        for i, unidad in enumerate(objetivo):
+            if unidad in presentes_fijas:
+                continue
+            antes_de = next((u for u in objetivo[i + 1:] if u in presentes_fijas), "")
+            self.rpc.insertar_unidad(unidad, antes_de, bool(estereo))
+        self.rpc.renumerar(estereo)
+
+    def reordenar(self, estereo: int, orden: list[str]) -> None:
+        """Arrastrar un bloque en el GRID: deja la fila con exactamente `orden`, en el rack Y en
+        el audio. Los bloques fijos (el Amp) no se mueven -- tumba al motor -- pero sí se puede
+        pedir un orden donde el Amp quede en otro lugar: se logra moviendo los demás alrededor.
+        """
+        actual = list(self.rpc.orden_rack(estereo))
+        if sorted(orden) != sorted(actual):
+            raise ValueError("El orden pedido no coincide con los bloques de la fila")
+        fijas = self._unidades_fijas()
+        presentes_fijas = [u for u in actual if u in fijas]
+        if [u for u in orden if u in fijas] != presentes_fijas:
+            raise ValueError("Los bloques fijos del motor no pueden cambiar de orden entre sí")
+        if orden != actual:
+            self._colocar(estereo, orden, presentes_fijas)
 
     def _unidades_fijas(self) -> frozenset[str]:
         if self._fijas is None:
@@ -330,5 +376,8 @@ class ControladorEscenario:
         promedio = sum(intervalos) / len(intervalos)
         if promedio <= 0:
             return "Tap..."
-        self.tempo_bpm = round(60.0 / promedio, 1)
+        bpm = round(60.0 / promedio, 1)
+        if not 24 <= bpm <= 360:
+            return "Tap..."
+        self.fijar_tempo(bpm)
         return f"{self.tempo_bpm} BPM"

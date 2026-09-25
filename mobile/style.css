@@ -753,3 +753,152 @@ svg .relleno { fill: currentColor; stroke: none; }
   box-shadow: 0 8px 24px rgba(0,0,0,0.5);
 }
 .aviso.error { background: var(--error); }
+
+/* -- Arrastrar bloques en el GRID -------------------------------------------------------------- */
+
+.bloque[data-id] { touch-action: none; cursor: grab; }
+.bloque.hueco-arrastre { opacity: 0.18; border-style: dashed; }
+.fila-arrastre .bloque[data-id]:not(.hueco-arrastre) { transition: transform .12s; }
+.bloque.fantasma {
+  position: fixed;
+  z-index: 40;
+  margin: 0;
+  pointer-events: none;
+  cursor: grabbing;
+  box-shadow: 0 14px 34px rgba(0,0,0,0.7), 0 0 0 2px rgba(255,255,255,0.25);
+  opacity: 0.96;
+}
+
+/* -- Ventanas flotantes (Tuner / Tempo) -------------------------------------------------------- */
+
+.modal {
+  position: fixed;
+  z-index: 25;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  background: #1A1A1D;
+  border: 1px solid var(--borde);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+}
+.modal-cabeza {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 12px 20px;
+  border-bottom: 1px solid var(--borde);
+}
+.modal-titulo { font-size: 16px; font-weight: 600; margin-right: auto; }
+.modal-extras { display: flex; gap: 8px; align-items: center; }
+.modal-select {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--borde);
+  background: var(--sup);
+  color: var(--texto);
+  font: inherit;
+  font-size: 13px;
+}
+.modal-icono, .modal-cerrar {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--tenue);
+}
+.modal-icono svg, .modal-cerrar svg { width: 20px; height: 20px; }
+.modal-icono.activo { background: rgba(248,113,113,0.15); color: var(--error); }
+.modal-cerrar:active, .modal-icono:active { background: var(--sup2); color: var(--texto); }
+
+/* Afinador */
+.afinador { --af: #6B7280; padding: 22px 26px 18px; }
+.afinador.afinado { --af: #34D399; }
+.afinador.cerca { --af: #FBBF24; }
+.afinador:not(.afinado):not(.cerca):not(.sin-senal) { --af: #F87171; }
+.af-escala {
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr auto;
+  align-items: center;
+  justify-items: center;
+  color: var(--tenue);
+  font-size: 12px;
+}
+.af-cents { color: var(--texto); font-variant-numeric: tabular-nums; min-width: 4ch; text-align: center; }
+.af-flecha { color: #3A3A40; }
+.af-flecha svg { width: 16px; height: 16px; }
+.af-flecha.on { color: var(--af); }
+.af-pista { position: relative; height: 64px; margin: 10px 0; }
+.af-pista::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  height: 2px; background: #D4D4D8; transform: translateY(-50%);
+}
+.af-marca {
+  position: absolute; left: 50%; top: 50%;
+  width: 64px; height: 64px; transform: translate(-50%, -50%);
+  border-radius: 50%; border: 2px solid #E4E4E7; background: #1A1A1D;
+}
+.af-punto {
+  position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%);
+  border-radius: 50%; background: var(--af);
+  transition: left .1s linear, background-color .2s;
+  box-shadow: 0 0 18px color-mix(in srgb, var(--af) 45%, transparent);
+}
+.af-notas { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; color: var(--tenue); font-size: 18px; }
+.af-vecina.der { text-align: right; }
+.af-nota { color: var(--texto); font-size: 44px; font-weight: 600; line-height: 1; min-width: 2ch; text-align: center; }
+.af-nota sub { font-size: 16px; color: var(--tenue); font-weight: 500; }
+.afinado .af-nota { color: var(--af); }
+.af-pie { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; color: var(--tenue); font-size: 13px; }
+.af-ref { display: flex; align-items: center; gap: 6px; }
+.af-ref button, .tempo-pasos button {
+  width: 32px; height: 32px; border-radius: 8px;
+  border: 1px solid var(--borde); background: var(--sup); color: var(--texto); font-size: 18px;
+}
+.af-ref-valor { color: var(--texto); min-width: 7ch; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* Tempo */
+.tempo { padding: 18px 26px 20px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.tempo-ayuda { margin: 0; text-align: center; color: #C7C7CC; font-size: 13px; line-height: 1.45; max-width: 380px; min-height: 2.9em; }
+.tempo-fila { width: 100%; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin-top: 6px; }
+.tempo-tap {
+  justify-self: start;
+  width: 86px; height: 64px; border-radius: 10px;
+  border: 1px solid var(--borde); background: var(--sup);
+  color: var(--texto); font-weight: 600; letter-spacing: .06em;
+  touch-action: manipulation;
+}
+.tempo-tap.pulso { animation: pulso-tap .18s ease-out; }
+@keyframes pulso-tap { from { background: #34D399; color: #000; } to { background: var(--sup); } }
+.tempo-bpm { position: relative; display: flex; align-items: center; }
+.tempo-numero { color: #34D399; font-size: 64px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; min-width: 3ch; text-align: center; }
+.tempo-led {
+  position: absolute; right: -16px; top: 6px;
+  width: 8px; height: 8px; border-radius: 50%; background: #34D399;
+  animation: led-tempo 0.5s steps(1) infinite;
+}
+@keyframes led-tempo { 0% { opacity: 1; } 25% { opacity: 0.15; } }
+.tempo-pasos { justify-self: end; display: flex; }
+.tempo-pasos button { width: 40px; height: 40px; }
+.tempo-pasos .menos { border-radius: 8px 0 0 8px; }
+.tempo-pasos .mas { border-radius: 0 8px 8px 0; border-left: none; }
+.tempo-slider { position: relative; width: min(300px, 100%); padding-bottom: 18px; }
+.tempo-slider input { width: 100%; accent-color: #D4D4D8; }
+.tempo-marcas span { position: absolute; bottom: 0; transform: translateX(-50%); font-size: 10px; color: var(--tenue); }
+.tempo-nota { margin: 2px 0 0; font-size: 12px; color: var(--tenue); }
+
+@media (max-height: 520px) {
+  .afinador { padding: 12px 20px 12px; }
+  .af-pista { height: 50px; margin: 4px 0; }
+  .af-marca { width: 50px; height: 50px; }
+  .af-punto { width: 34px; height: 34px; }
+  .af-nota { font-size: 34px; }
+  .af-pie { margin-top: 8px; }
+  .tempo { padding: 10px 20px 12px; gap: 6px; }
+  .tempo-numero { font-size: 48px; }
+  .tempo-tap { height: 52px; }
+}

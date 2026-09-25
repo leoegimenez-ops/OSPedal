@@ -22,6 +22,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from engine.rpc_client import GuitarixRPC
+
 # Las setlists de trabajo (las que escribe el botón de guardar) van a un directorio temporal: los
 # tests no deben tocar presets/setlists/ del repo. Tiene que fijarse ANTES de importar la API,
 # que lee la variable al cargar el módulo.
@@ -54,6 +56,7 @@ class GXFalso:
         self.falla_version = None  # GuitarixError, si se quiere simular un error del motor
         self.falla_conexion = False  # simula que el socket se corto a mitad de pedido
         self.rack = {0: ["ampstack", "freeverb"], 1: []}
+        self.valores = {}
         GXFalso.instancias.append(self)
 
     def conectar(self):
@@ -87,8 +90,20 @@ class GXFalso:
         return list(self.rack[cadena])
 
     def insertar_unidad(self, unidad, antes_de="", estereo=False):
-        self.llamadas.append(("insert", unidad, int(estereo)))
-        self.rack[int(estereo)].append(unidad)
+        # Como GxSettings::insert_rack_unit: si ya está, la mueve.
+        self.llamadas.append(("insert", unidad, antes_de, int(estereo)))
+        fila = self.rack[int(estereo)]
+        if unidad in fila:
+            fila.remove(unidad)
+        fila.insert(fila.index(antes_de) if antes_de in fila else len(fila), unidad)
+
+    renumerar = GuitarixRPC.renumerar   # el código real, sobre este rack falso
+
+    def afinador(self, activo):
+        self.llamadas.append(("switch_tuner", int(activo)))
+
+    def frecuencia_afinador(self):
+        return 329.63
 
     def quitar_unidad(self, unidad, estereo=False):
         self.llamadas.append(("remove", unidad, int(estereo)))
@@ -121,12 +136,13 @@ class GXFalso:
         self.llamadas.append(("setpreset", banco, preset))
 
     def obtener(self, *nombres):
-        return {n: 1.0 for n in nombres}
+        return {n: self.valores.get(n, 1.0) for n in nombres}
 
     def fijar(self, *pares):
         if len(pares) % 2:
             raise ValueError("fijar() requiere pares nombre/valor: la cantidad debe ser par.")
         self.llamadas.append(("set",) + pares)
+        self.valores.update(zip(pares[::2], pares[1::2]))
 
     def suscribir(self, *tokens):
         self.suscripciones.extend(tokens)
@@ -536,6 +552,49 @@ for _ in range(5):
     client.post("/lineas/guitarra1/escenas")
 r = client.post("/lineas/guitarra1/escenas")
 check("400 al pasar de 8 (A-H)", r.status_code == 400, f"-> {r.status_code} {r.text}")
+
+print("\n25. Arrastrar bloques: /grid/ordenar cambia rack y audio")
+reset()
+client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "ts9sim", "estereo": False})
+fake = api._linea("guitarra1").rpc
+check("insertar ya renumera: ts9sim despues del amp suena post",
+      fake.valores.get("ts9sim.pp") == 0, f"-> {fake.valores.get('ts9sim.pp')}")
+r = client.post("/lineas/guitarra1/grid/ordenar",
+                json={"estereo": False, "orden": ["ts9sim", "ampstack", "freeverb"]})
+check("200 y el grid devuelto trae el orden nuevo",
+      r.status_code == 200 and [u["id"] for u in r.json()["filas"][0]["unidades"]]
+      == ["ts9sim", "ampstack", "freeverb"], f"-> {r.status_code} {r.text[:200]}")
+check("ts9sim ahora pre (antes del amp), freeverb post",
+      fake.valores.get("ts9sim.pp") == 1 and fake.valores.get("freeverb.pp") == 0,
+      f"-> {fake.valores}")
+r = client.post("/lineas/guitarra1/grid/ordenar", json={"estereo": False, "orden": ["ts9sim", "ampstack"]})
+check("400 si no es el mismo conjunto de bloques", r.status_code == 400, f"-> {r.status_code}")
+
+print("\n26. Afinador")
+r = client.post("/lineas/guitarra1/afinador", json={"activo": True, "silenciar": True, "referencia": 442})
+check("200", r.status_code == 200, f"-> {r.status_code} {r.text}")
+check("prende el afinador del motor", ("switch_tuner", 1) in fake.llamadas)
+check("silencia y fija referencia",
+      fake.valores.get("engine.mute") == 1 and fake.valores.get("ui.tuner_reference_pitch") == 442)
+r = client.get("/lineas/guitarra1/afinador")
+check("devuelve la frecuencia", r.json() == {"frecuencia": 329.63}, f"-> {r.json()}")
+client.post("/lineas/guitarra1/afinador", json={"activo": False, "silenciar": False})
+check("al cerrar: apaga y des-silencia",
+      ("switch_tuner", 0) in fake.llamadas and fake.valores.get("engine.mute") == 0)
+r = client.post("/lineas/guitarra1/afinador", json={"activo": True, "referencia": 300})
+check("400 con referencia absurda", r.status_code == 400)
+
+print("\n27. Tempo")
+client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "echo", "estereo": False})
+r = client.post("/lineas/guitarra1/tempo", json={"bpm": 96})
+check("200 y queda en el estado", r.status_code == 200 and r.json()["tempo_bpm"] == 96, f"-> {r.text[:200]}")
+check("el echo del rack sigue el tempo", fake.valores.get("echo.bpm") == 96, f"-> {fake.valores.get('echo.bpm')}")
+r = client.post("/lineas/guitarra1/tempo", json={"bpm": 90, "alcance": "global"})
+check("global: todas las lineas a 90",
+      r.status_code == 200 and all(api._linea(l).tempo_bpm == 90 for l in api.LINEAS),
+      f"-> {r.status_code} {[api._linea(l).tempo_bpm for l in api.LINEAS]}")
+r = client.post("/lineas/guitarra1/tempo", json={"bpm": 999})
+check("400 fuera de rango", r.status_code == 400)
 
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

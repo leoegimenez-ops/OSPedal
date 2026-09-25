@@ -407,6 +407,37 @@ class GuitarixRPC:
         """
         self.notificar("insert_rack_unit", unidad, antes_de, int(estereo))
 
+    def renumerar(self, cadena: int = 0) -> None:
+        """Hace que el AUDIO siga el orden del rack.
+
+        El orden de `get_rack_unit_order` es solo la lista; el motor procesa según el
+        `<unidad>.position` de cada bloque (y, en la cadena mono, `<unidad>.pp`: 1 = antes del
+        amp, 0 = después; peso = position + 2000 si es post -- `gx_pluginloader.h:77`). Con la
+        GUI de escritorio eso lo renumera `RackContainer::renumber()` (`rack.cpp:2076`) después
+        de cada cambio; en modo headless (-N) nadie lo hace, así que un bloque movido o recién
+        insertado se veía en un lugar y sonaba en otro. Esto replica exactamente ese renumber.
+        """
+        pos = 0
+        pre = 1
+        pares: list[Any] = []
+        for unidad in self.orden_rack(cadena):
+            if unidad == "ampstack":
+                pos, pre = 1, 0
+                continue
+            pares += [f"{unidad}.position", pos]
+            if cadena == 0:
+                pares += [f"{unidad}.pp", pre]
+            pos += 1
+        if pares:
+            self.fijar(*pares)
+
+    def afinador(self, activo: bool) -> None:
+        self.notificar("switch_tuner", int(activo))
+
+    def frecuencia_afinador(self) -> float:
+        """Frecuencia detectada en Hz (0 si no hay señal). Requiere `afinador(True)`."""
+        return float(self.llamar("get_tuner_freq") or 0.0)
+
     def quitar_unidad(self, unidad: str, estereo: bool = False) -> None:
         """Saca un bloque del rack. El motor además apaga su `on_off` (`jsonrpc.cpp`,
         `remove_rack_unit`). Notificación pura, igual que insertar."""

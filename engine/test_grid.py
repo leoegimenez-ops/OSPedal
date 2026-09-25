@@ -13,6 +13,7 @@ from pathlib import Path
 from engine.categorias import CLAVES, categoria, fijos, insertables
 from engine.controlador import ControladorEscenario
 from engine.midi_engine import Accion
+from engine.rpc_client import GuitarixRPC
 from presets.preset_manager import Banco, Escena, Preset, Setlist
 
 fallos = []
@@ -66,7 +67,11 @@ class MotorFalso:
         if unidad in self.FIJOS:
             raise MotorTumbado(f"insert {unidad}")
         fila = self.rack[int(estereo)]
+        if unidad in fila:              # como GxSettings::insert_rack_unit: si ya está, la mueve
+            fila.remove(unidad)
         fila.insert(fila.index(antes_de) if antes_de in fila else len(fila), unidad)
+
+    renumerar = GuitarixRPC.renumerar   # el código real, sobre este rack falso
 
     def quitar_unidad(self, unidad, estereo=False):
         self.llamadas.append(("remove", unidad, int(estereo)))
@@ -237,6 +242,71 @@ check("advertencia con el motivo", ctrl2.advertencia and "Factory" in ctrl2.adve
 check("los valores del preset se aplicaron igual", motor2.valores.get("ts9sim.drive") == 0.9)
 ctrl2.ejecutar(Accion.CAMBIAR_PRESET, 0)
 check("la advertencia se limpia al cargar uno sano", ctrl2.advertencia is None)
+
+def orden_de_audio(m, cadena=0):
+    """Orden en que el motor PROCESA: por peso = position (+2000 si es post), como
+    Plugin::position_weight (gx_pluginloader.h:77). El amp va entre pre y post."""
+    def peso(u):
+        if u == "ampstack":
+            return 1000
+        pos = m.valores[f"{u}.position"]
+        return pos if cadena or m.valores.get(f"{u}.pp", 1) == 1 else pos + 2000
+    return sorted(m.orden_rack(cadena), key=peso)
+
+
+print("\n11. Arrastrar: reordenar() cambia el rack Y el orden del audio")
+m3 = MotorFalso()
+m3.rack[0] = ["ampstack", "ts9sim", "echo"]
+c3 = ControladorEscenario(Setlist(nombre="T", bancos=[Banco("A", [Preset("Uno")])]), m3)
+for orden in (["echo", "ampstack", "ts9sim"],       # un pedal antes del amp
+              ["ts9sim", "echo", "ampstack"],       # "mover el amp" al final
+              ["ampstack", "echo", "ts9sim"]):      # todo después del amp, invertido
+    m3.llamadas.clear()
+    c3.reordenar(0, orden)
+    check(f"rack {orden}", m3.rack[0] == orden, f"-> {m3.rack[0]}")
+    check(f"  el audio sigue ese orden", orden_de_audio(m3) == orden, f"-> {orden_de_audio(m3)}")
+    check("  ampstack nunca se inserto ni quito",
+          not any(c[0] in ("insert", "remove") and c[1] == "ampstack" for c in m3.llamadas))
+check("antes del amp = pre, despues = post",
+      m3.valores["echo.pp"] == 0 and m3.valores["ts9sim.pp"] == 0)
+m3.rack[1] = ["freeverb", "echo_st"]
+c3.reordenar(1, ["echo_st", "freeverb"])
+check("fila estereo: solo position, sin pp",
+      orden_de_audio(m3, 1) == ["echo_st", "freeverb"] and "freeverb.pp" not in m3.valores,
+      f"-> {orden_de_audio(m3, 1)}")
+for malo, frag in [(["echo", "ampstack"], "no coincide"), (["echo", "ts9sim", "ampstack", "x"], "no coincide")]:
+    try:
+        c3.reordenar(0, malo)
+        check(f"rechaza {malo}", False)
+    except ValueError as e:
+        check(f"rechaza {malo}", frag in str(e), f"-> {e}")
+
+print("\n12. Cargar un preset tambien renumera (el audio sigue la cadena guardada)")
+c3.setlist.preset(0, 0).cadena = {"mono": ["ts9sim", "ampstack", "echo"]}
+c3.ejecutar(Accion.CAMBIAR_PRESET, 0)
+check("audio en el orden guardado", orden_de_audio(m3) == ["ts9sim", "ampstack", "echo"],
+      f"-> {orden_de_audio(m3)}")
+
+print("\n13. Tempo: lleva los delays del rack al BPM")
+m3.rack[0] = ["ampstack", "echo", "duckDelay"]
+m3.rack[1] = ["stereodelay"]
+c3.fijar_tempo(100)
+check("echo.bpm = 100", m3.valores.get("echo.bpm") == 100)
+check("stereo delay L y R", m3.valores.get("stereodelay.lbpm") == 100 and m3.valores.get("stereodelay.rbpm") == 100)
+check("delay en ms = negra (600 ms)", m3.valores.get("duckDelay.time") == 600.0, f"-> {m3.valores.get('duckDelay.time')}")
+check("queda como tempo del preset (se guarda con 💾)", c3.preset.tempo_bpm == 100)
+try:
+    c3.fijar_tempo(500)
+    check("rechaza 500 BPM", False)
+except ValueError:
+    check("rechaza 500 BPM", True)
+t = [0.0]
+c3.reloj = lambda: t[0]
+for _ in range(4):
+    c3.ejecutar(Accion.TAP_TEMPO)
+    t[0] += 0.5
+check("TAP cada 0.5 s -> 120 BPM y sincroniza", c3.tempo_bpm == 120 and m3.valores.get("echo.bpm") == 120,
+      f"-> {c3.tempo_bpm} / {m3.valores.get('echo.bpm')}")
 
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

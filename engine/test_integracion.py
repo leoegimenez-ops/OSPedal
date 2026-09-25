@@ -39,6 +39,9 @@ class RPCFalso:
     def notificar(self, metodo, *params):
         self.llamadas.append((metodo,) + params)
 
+    def orden_rack(self, cadena=0):
+        return []   # rack vacío: sin delays que sincronizar con el tempo
+
     def ultimo_set(self):
         for c in reversed(self.llamadas):
             if c[0] == "set":

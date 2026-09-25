@@ -539,6 +539,11 @@ def insertar_bloque(linea: str, datos: CambiarBloque) -> dict:
         raise HTTPException(409, f"{datos.unidad!r} ya está en el rack")
     ctrl.rpc.insertar_unidad(datos.unidad, "", datos.estereo)
     ctrl.rpc.fijar(f"{datos.unidad}.on_off", 1)
+    # Sin renumerar, el bloque se ve al final pero suena donde diga su `position` por defecto
+    # (p.ej. antes del amp aunque se muestre después) -- ver GuitarixRPC.renumerar.
+    ctrl.rpc.renumerar(int(datos.estereo))
+    if ctrl.tempo_bpm:
+        ctrl._aplicar_tempo()
     return _grid(linea)
 
 
@@ -552,7 +557,83 @@ def quitar_bloque(linea: str, datos: CambiarBloque) -> dict:
     if datos.unidad not in ctrl.rpc.orden_rack(int(datos.estereo)):
         raise HTTPException(404, f"{datos.unidad!r} no está en esa fila")
     ctrl.rpc.quitar_unidad(datos.unidad, datos.estereo)
+    ctrl.rpc.renumerar(int(datos.estereo))
     return _grid(linea)
+
+
+class OrdenarFila(BaseModel):
+    estereo: bool = False
+    orden: list[str]
+
+
+@app.post("/lineas/{linea}/grid/ordenar")
+def ordenar_fila(linea: str, datos: OrdenarFila) -> dict:
+    """Arrastrar un bloque a otra posición de su fila. Cambia el orden real del audio, no solo
+    el dibujo (ver `ControladorEscenario.reordenar`). Solo dentro de una fila: mono y estéreo
+    son cadenas distintas y cada plugin entra en una sola."""
+    try:
+        _linea(linea).reordenar(int(datos.estereo), datos.orden)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return _grid(linea)
+
+
+class ConfigAfinador(BaseModel):
+    activo: bool
+    silenciar: bool | None = None
+    referencia: float | None = None
+
+
+@app.post("/lineas/{linea}/afinador")
+def configurar_afinador(linea: str, datos: ConfigAfinador) -> dict:
+    """Ventana del afinador: prenderlo (el motor solo analiza el tono mientras está prendido),
+    silenciar la salida para afinar en vivo, y la referencia (La = 440 Hz por defecto).
+    Al cerrar la ventana la app manda activo=false y silenciar=false."""
+    ctrl = _linea(linea)
+    if datos.referencia is not None and not 400 <= datos.referencia <= 480:
+        raise HTTPException(400, "La referencia va de 400 a 480 Hz")
+    ctrl.rpc.afinador(datos.activo)
+    pares: list[Any] = []
+    if datos.silenciar is not None:
+        pares += ["engine.mute", int(datos.silenciar)]
+    if datos.referencia is not None:
+        pares += ["ui.tuner_reference_pitch", datos.referencia]
+    if pares:
+        ctrl.rpc.fijar(*pares)
+    return {"ok": True}
+
+
+@app.get("/lineas/{linea}/afinador")
+def leer_afinador(linea: str) -> dict:
+    """Frecuencia detectada ahora (Hz, 0 = sin señal). La app lo consulta ~10 veces por
+    segundo y calcula nota y cents con su propia referencia."""
+    return {"frecuencia": _linea(linea).rpc.frecuencia_afinador()}
+
+
+class FijarTempo(BaseModel):
+    bpm: float
+    alcance: str = "preset"   # "preset" (esta línea) | "global" (las cuatro)
+
+
+@app.post("/lineas/{linea}/tempo")
+def fijar_tempo(linea: str, datos: FijarTempo) -> dict:
+    """Ventana Tempo (TAP, +/-, slider). Lleva los delays del rack al BPM. "preset": se guarda
+    con el preset activo al tocar 💾. "global": el mismo BPM en todas las líneas (banda en
+    vivo: todos a tiempo); si el motor de alguna línea está caído, se saltea y se informa."""
+    if datos.alcance not in ("preset", "global"):
+        raise HTTPException(400, "alcance: 'preset' o 'global'")
+    destinos = list(LINEAS) if datos.alcance == "global" else [linea]
+    saltadas = []
+    for nombre in destinos:
+        try:
+            _linea(nombre).fijar_tempo(datos.bpm)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except (ConnectionError, HTTPException):
+            if nombre == linea:
+                raise
+            saltadas.append(nombre)
+    return {"saltadas": saltadas, **_estado_linea(_linea(linea), linea)}
 
 
 @app.get("/lineas/{linea}/parametros")

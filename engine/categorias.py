@@ -125,6 +125,34 @@ def insertables(pluginlist: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return salida
 
 
+# Tempo: qué parámetro de cada delay sigue al BPM del preset (la ventana Tempo / TAP).
+# Relevado con queryunit el 25/09/2026: la mayoría tiene un parámetro BPM nativo [24..360]; los
+# que van en ms reciben la negra (60000 / bpm) dentro de su rango. Los multibanda (mbdel, mbe)
+# no se tocan: cada banda tiene su tiempo a propósito. "lfobpm" tampoco: es la modulación.
+SINCRONIZABLES: dict[str, list[tuple[str, str, float, float]]] = {
+    # unidad: [(parámetro, "bpm" | "ms", mínimo, máximo)]
+    "delay": [("delay.bpm", "bpm", 24, 360)],
+    "echo": [("echo.bpm", "bpm", 24, 360)],
+    "dide": [("dide.bpm", "bpm", 24, 360)],
+    "didest": [("didest.bpm", "bpm", 24, 360)],
+    "stereodelay": [("stereodelay.lbpm", "bpm", 24, 360), ("stereodelay.rbpm", "bpm", 24, 360)],
+    "stereoecho": [("stereoecho.lbpm", "bpm", 24, 360), ("stereoecho.rbpm", "bpm", 24, 360)],
+    "duckDelay": [("duckDelay.time", "ms", 1, 2000)],
+    "duckDelaySt": [("duckDelaySt.time", "ms", 1, 2000)],
+    "reversedelay": [("reversedelay.time", "ms", 200, 2000)],
+}
+
+
+def pares_tempo(unidades: list[str], bpm: float) -> list[Any]:
+    """Pares `set` para llevar los delays presentes al tempo dado."""
+    pares: list[Any] = []
+    for unidad in unidades:
+        for nombre, tipo, minimo, maximo in SINCRONIZABLES.get(unidad, []):
+            valor = bpm if tipo == "bpm" else 60000.0 / bpm
+            pares += [nombre, round(min(maximo, max(minimo, valor)), 2)]
+    return pares
+
+
 # El motor tiene slots duplicados con el mismo nombre (segunda instancia de NAM/RTNeural): sin
 # esto el selector "+" mostraría dos "Neural Amp Modeler" indistinguibles.
 _NOMBRES_OVERRIDE = {
