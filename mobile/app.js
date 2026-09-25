@@ -144,7 +144,8 @@ async function accion(nombre, parametro = null, textoAviso = null) {
     estado.linea_estado = r;
     await recargarGrid().catch(() => {});
     render();
-    if (textoAviso) aviso(textoAviso(r));
+    if (r.advertencia) aviso(`Base preset not found in engine — applied the rest`, true);
+    else if (textoAviso) aviso(textoAviso(r));
   } catch (e) {
     aviso(e.message, true);
   }
@@ -193,11 +194,26 @@ function renderCabecera() {
   });
 }
 
+/* Motor de la línea caído o sin arrancar: se reintenta solo cada 3 s mientras sigamos en esa
+ * línea, así la pantalla vuelve sola cuando el motor vuelve -- sin tener que recargar. */
+let tReintento = null;
 function mostrarErrorLinea(mensaje) {
+  const linea = estado.linea;
+  clearTimeout(tReintento);
+  tReintento = setTimeout(async () => {
+    if (estado.linea !== linea || estado.linea_estado) return;
+    try {
+      await cargarLinea();
+      render();
+    } catch (e) {
+      if (estado.linea === linea) mostrarErrorLinea(e.message);
+    }
+  }, 3000);
   $contenido.innerHTML = "";
   const caja = nuevo("div", "mensaje-centro error");
   const interior = nuevo("div");
-  interior.appendChild(nuevo("div", "", `${esc(etiquetaLinea(estado.linea))}: ${esc(mensaje)}`));
+  interior.appendChild(nuevo("div", "", `${esc(etiquetaLinea(estado.linea))} engine offline — retrying…`));
+  interior.appendChild(nuevo("div", "tile-nota", esc(mensaje)));
   const opciones = nuevo("div", "segmentado");
   opciones.style.marginTop = "14px";
   for (const l of estado.lineas) {

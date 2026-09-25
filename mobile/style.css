@@ -17,7 +17,7 @@
   --error: #F87171;
 
   --cab-alto: 56px;
-  --tab-alto: 58px;
+  --tab-alto: 52px;
   --bloque: 72px;
   --hueco: 28px;
   --radio-bloque: 18px;
@@ -29,7 +29,7 @@
 
 /* Celular en horizontal: poca altura, todo más compacto. */
 @media (max-height: 520px) {
-  :root { --cab-alto: 46px; --tab-alto: 48px; --bloque: 52px; --hueco: 18px; --radio-bloque: 14px; }
+  :root { --cab-alto: 46px; --tab-alto: 44px; --bloque: 52px; --hueco: 18px; --radio-bloque: 14px; }
 }
 @media (max-width: 700px) and (orientation: portrait) {
   :root { --bloque: 54px; --hueco: 16px; --radio-bloque: 14px; }
@@ -632,15 +632,19 @@ svg .relleno { fill: currentColor; stroke: none; }
   background: transparent;
   color: var(--tenue);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;          /* ícono al costado del nombre (pedido del usuario 25/09) */
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  font-size: 11px;
+  gap: 8px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
 }
-.tab svg { width: 20px; height: 20px; }
+.tab svg { width: 20px; height: 20px; flex-shrink: 0; }
+@media (max-width: 420px) {
+  .tab { gap: 5px; font-size: 10.5px; letter-spacing: 0.04em; }
+  .tab svg { width: 17px; height: 17px; }
+}
 .tab.activo { color: var(--activo); }
 .tab.activo::before {
   content: "";

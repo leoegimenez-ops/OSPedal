@@ -105,7 +105,9 @@ print("\n6. Aplicar al motor")
 rpc = RPCFalso()
 aplicar(sl.preset(0, 0), rpc)
 check("dos llamadas", len(rpc.llamadas) == 2, f"-> {len(rpc.llamadas)}")
-check("primero setpreset", rpc.llamadas[0] == ("setpreset", "Factory", "Clean"),
+# Musiclab es el banco de fábrica real de Guitarix 0.47.0: un banco inexistente ("Factory",
+# lo que tenía antes el ejemplo) hace segfault en el motor -- ver GuitarixRPC.set_preset.
+check("primero setpreset", rpc.llamadas[0] == ("setpreset", "Musiclab", "Clean - Simplicity"),
       f"-> {rpc.llamadas[0]}")
 check("despues un solo set", rpc.llamadas[1][0] == "set")
 

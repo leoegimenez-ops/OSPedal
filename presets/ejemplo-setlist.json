@@ -8,7 +8,7 @@
       "presets": [
         {
           "nombre": "Clean Verso",
-          "guitarix": { "banco": "Factory", "preset": "Clean" },
+          "guitarix": { "banco": "Musiclab", "preset": "Clean - Simplicity" },
           "parametros": {
             "amp.stage1.gain": 0.35,
             "amp.masterGain": 0.7
@@ -33,7 +33,7 @@
         },
         {
           "nombre": "Crunch",
-          "guitarix": { "banco": "Factory", "preset": "Crunch" },
+          "guitarix": { "banco": "Musiclab", "preset": "Crunch - Crunch Fuzz Drive" },
           "parametros": { "amp.stage1.gain": 0.65 },
           "tempo_bpm": 120,
           "stomps": [
@@ -61,7 +61,7 @@
       "presets": [
         {
           "nombre": "Acústico",
-          "guitarix": { "banco": "Factory", "preset": "Acoustic" },
+          "guitarix": { "banco": "Musiclab", "preset": "Acoustic - Angie" },
           "tempo_bpm": 95,
           "volumen": 0.9
         }

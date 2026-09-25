@@ -281,8 +281,24 @@ class GuitarixRPC:
     def presets(self, banco: str) -> Any:
         return self.llamar("presets", banco)
 
+    def existe_preset(self, banco: str, preset: str) -> bool:
+        for b in self.bancos() or []:
+            if isinstance(b, dict) and b.get("name") == banco:
+                return preset in (b.get("presets") or [])
+        return False
+
     def set_preset(self, banco: str, preset: str) -> None:
-        """Cambia el preset activo. Notificación pura: sin round-trip, sin gap de audio."""
+        """Cambia el preset activo.
+
+        Antes de mandarlo verifica que el banco y el preset existan: Guitarix 0.47.0 hace
+        SEGFAULT (`gx_system::PresetFile::get_index`) si le piden uno que no existe, en vez de
+        responder un error -- confirmado el 25/09/2026 con un motor aislado, y era lo que tumbaba
+        las líneas al cambiar de preset desde la PWA (la setlist de ejemplo apuntaba a un banco
+        "Factory" que no existe). Cuesta un round-trip local (`banks`, ~1 ms); el cambio en sí
+        sigue siendo notificación pura, sin gap de audio. Si no existe: ValueError, no se manda.
+        """
+        if not self.existe_preset(banco, preset):
+            raise ValueError(f"El preset {banco!r} / {preset!r} no existe en Guitarix")
         self.notificar("setpreset", banco, preset)
 
     def parametros(self) -> Any:

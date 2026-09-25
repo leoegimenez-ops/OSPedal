@@ -218,5 +218,25 @@ for datos, frag in [
     except ValueError as e:
         check(f"rechaza {frag}", frag in str(e), f"-> {e}")
 
+print("\n10. Preset base inexistente en el motor: se avisa y se aplica el resto igual")
+
+
+class MotorSinBanco(MotorFalso):
+    def set_preset(self, b, p):
+        raise ValueError(f"El preset {b!r} / {p!r} no existe en Guitarix")
+
+
+motor2 = MotorSinBanco()
+p_malo = Preset("Malo", guitarix_banco="Factory", guitarix_preset="Clean",
+                parametros={"ts9sim.drive": 0.9})
+ctrl2 = ControladorEscenario(Setlist(nombre="T", bancos=[Banco("A", [Preset("Uno"), p_malo])]), motor2)
+ctrl2.ejecutar(Accion.CAMBIAR_PRESET, 1)
+check("no revienta y queda en el preset pedido", ctrl2.preset.nombre == "Malo")
+check("advertencia con el motivo", ctrl2.advertencia and "Factory" in ctrl2.advertencia,
+      f"-> {ctrl2.advertencia!r}")
+check("los valores del preset se aplicaron igual", motor2.valores.get("ts9sim.drive") == 0.9)
+ctrl2.ejecutar(Accion.CAMBIAR_PRESET, 0)
+check("la advertencia se limpia al cargar uno sano", ctrl2.advertencia is None)
+
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

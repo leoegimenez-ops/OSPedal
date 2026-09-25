@@ -294,8 +294,11 @@ def presets(banco: str) -> Any:
 
 @app.post("/preset")
 def cambiar_preset(datos: CambiarPreset) -> dict:
-    """Notificación pura hacia Guitarix (sin round-trip): ver `GuitarixRPC.set_preset`."""
-    _motor().set_preset(datos.banco, datos.preset)
+    """Ver `GuitarixRPC.set_preset`: un preset inexistente da 404 en vez de tumbar al motor."""
+    try:
+        _motor().set_preset(datos.banco, datos.preset)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
     return {"ok": True}
 
 
@@ -402,6 +405,7 @@ def _estado_linea(ctrl: ControladorEscenario, linea: str | None = None) -> dict:
             for i, s in enumerate(preset.stomps)
         ],
         "escenas": [e.nombre for e in preset.escenas],
+        "advertencia": ctrl.advertencia,
     }
 
 

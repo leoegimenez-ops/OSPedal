@@ -24,7 +24,9 @@ RESULTADOS = {
     "getversion": "0.46.0",
     "getstate": "running",
     "jack_cpu_load": 12.5,
-    "banks": ["Rock", "Blues"],
+    # Formato real de `banks` (verificado contra 0.47.0).
+    "banks": [{"name": "Rock", "mutable": 1, "type": "file", "presets": ["Crunch", "Lead"]},
+              {"name": "Blues", "mutable": 1, "type": "file", "presets": []}],
 }
 
 recibidos = []          # todo lo que llego al servidor
@@ -116,7 +118,7 @@ def main():
         check("version()", gx.version() == "0.46.0")
         check("estado()", gx.estado() == "running")
         check("carga_cpu()", gx.carga_cpu() == 12.5)
-        check("bancos()", gx.bancos() == ["Rock", "Blues"])
+        check("bancos()", [b["name"] for b in gx.bancos()] == ["Rock", "Blues"])
 
         print("\n2. Parametros posicionales (nunca por nombre)")
         gx.presets("Rock")
@@ -128,9 +130,21 @@ def main():
         antes = len(recibidos)
         gx.set_preset("Rock", "Crunch")
         time.sleep(0.2)
-        env = recibidos[antes]
+        env = [m for m in recibidos[antes:] if m.get("method") == "setpreset"][-1]
         check("setpreset sin id", "id" not in env)
         check("setpreset params", env["params"] == ["Rock", "Crunch"])
+
+        print("\n3b. Preset inexistente: NO se manda (Guitarix hace segfault con eso)")
+        for banco, preset in [("Factory", "Clean"), ("Rock", "NoExiste")]:
+            antes = len(recibidos)
+            try:
+                gx.set_preset(banco, preset)
+                check(f"ValueError con {banco}/{preset}", False)
+            except ValueError:
+                check(f"ValueError con {banco}/{preset}", True)
+            time.sleep(0.1)
+            check(f"{banco}/{preset} nunca llega al motor",
+                  not any(m.get("method") == "setpreset" for m in recibidos[antes:]))
 
         print("\n4. Eventos del motor")
         gx.suscribir("preset")

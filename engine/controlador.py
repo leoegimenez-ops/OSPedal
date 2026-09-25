@@ -52,6 +52,8 @@ class ControladorEscenario:
     _taps: list[float] = field(default_factory=list, repr=False)
     # Ids de bloques fijos del motor; se piden una sola vez (la lista de plugins no cambia).
     _fijas: frozenset[str] | None = field(default=None, repr=False)
+    # Problema no fatal del último preset aplicado (p.ej. preset base inexistente en el motor).
+    advertencia: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.setlist.total_presets:
@@ -100,8 +102,14 @@ class ControladorEscenario:
         parámetros. Confirmado en vivo que sin este parámetro, `_cambiar_escena()` reenviaba
         `setpreset` en cada pisada de escena (ver `engine/test_integracion.py`).
         """
+        self.advertencia = None
         if incluir_base and preset.guitarix_banco and preset.guitarix_preset:
-            self.rpc.set_preset(preset.guitarix_banco, preset.guitarix_preset)
+            try:
+                self.rpc.set_preset(preset.guitarix_banco, preset.guitarix_preset)
+            except ValueError as exc:
+                # Preset base inexistente en el motor: se sigue con la cadena y los valores del
+                # preset en vez de cortar el cambio a mitad de camino (ver GuitarixRPC.set_preset).
+                self.advertencia = str(exc)
         if incluir_base and preset.cadena:
             self._sincronizar_cadena(preset.cadena)
         pares = preset.pares_rpc(self.escena_activa)
