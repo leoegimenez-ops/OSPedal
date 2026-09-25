@@ -169,6 +169,9 @@ async function cambiarLinea(linea) {
 // -- Render general ----------------------------------------------------------------------------
 
 function render() {
+  // La barra superior (preset, 💾, ⋮, escenas) va solo en GRID -- pedido del usuario 25/09:
+  // en las demás pestañas estorba y en el celular horizontal les robaba la altura.
+  document.body.dataset.tab = estado.tab;
   renderCabecera();
   for (const b of document.querySelectorAll(".tab")) b.classList.toggle("activo", b.dataset.tab === estado.tab);
   if (estado.tab === "grid") renderGrid();

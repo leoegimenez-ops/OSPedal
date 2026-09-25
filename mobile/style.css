@@ -902,3 +902,47 @@ svg .relleno { fill: currentColor; stroke: none; }
   .tempo-numero { font-size: 48px; }
   .tempo-tap { height: 52px; }
 }
+
+/* -- Barra superior solo en GRID + celular horizontal (Safari con barra: ~844x320) -------------- */
+
+body:not([data-tab="grid"]) .cabecera { display: none; }
+
+/* Notch/isla del iPhone en horizontal: que nada quede debajo. */
+body {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+@media (max-height: 520px) {
+  .pantalla-tiles { gap: 6px; padding: 6px 10px 8px; }
+  .segmentado button { height: 28px; padding: 0 12px; }
+  .flecha { height: 30px; }
+  .tiles { gap: 6px; }
+
+  /* GIG: ícono más chico y arriba, nombre abajo -- ya no se pisan en tiles de ~100 px. */
+  .tile { padding: 8px; }
+  .tile-icono { top: 8px; left: 8px; width: 30px; height: 30px; border-radius: 8px; }
+  .tile-icono svg { width: 17px; height: 17px; }
+  .tile-letra { top: 2px; right: 10px; font-size: clamp(22px, 7vh, 34px); }
+  .tile-nombre { left: 10px; right: 10px; bottom: 7px; font-size: 13px; }
+  .tile-nota { font-size: 10px; }
+  .tile-preset { padding: 8px 10px; }
+  .tile-preset .nombre { left: 10px; right: 10px; bottom: 8px; font-size: 14px; }
+
+  /* SENDS: paneo AL COSTADO del fader, así el fader usa toda la altura del canal. */
+  .consola { gap: 8px; }
+  .canal {
+    max-width: 180px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    align-items: center;
+    justify-items: center;
+    gap: 4px 6px;
+    padding: 6px 6px 6px 4px;
+  }
+  .canal-nombre, .canal-db { grid-column: 1 / -1; }
+  .canal .perilla { grid-column: 1; grid-row: 2; width: 58px; }
+  .canal .perilla svg { width: 40px; height: 40px; }
+  .canal .fader { grid-column: 2; grid-row: 2; align-self: stretch; min-height: 0; height: auto; }
+}
