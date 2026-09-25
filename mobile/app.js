@@ -44,21 +44,57 @@ let matriz = null;
 let busActivo = null;
 const temporizadores = {};   // debounce: clave -> setTimeout id
 
-const COLOR_POR_UNIDAD = [
-  [/^amp/, "#FF6B5C"],
-  [/^cab/, "#B98CFF"],
-  [/^(nam|rtneural)/, "#C9C8C4"],
-  [/^(ts9sim|fuzz)/, "#FFA724"],
-  [/^echo/, "#3DD8D0"],
-  [/^freeverb/, "#3DD68C"],
-  [/^chorus/, "#5FD9A4"],
-  [/^compressor/, "#8B93A8"],
-  [/^eq/, "#5AA9FF"],
+/* Íconos propios (line-art original, no calcados de ningún producto comercial) + un color bien
+ * distinto por categoría para que se note el contraste sobre fondo negro puro -- pedido
+ * explícito el 25/09/2026, con capturas de Cortex Control como referencia de estilo (no de
+ * arte: los glifos de acá son nuestros). "icono" es el contenido interno de un <svg
+ * viewBox="0 0 24 24" fill="none" stroke="currentColor">. */
+const ICONOS = {
+  amp: '<rect x="4" y="8" width="16" height="8" rx="1.5"/><circle cx="8" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="16" cy="12" r="1.3"/>',
+  cab: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.8" fill="currentColor"/>',
+  neural: '<rect x="3" y="9" width="2" height="6"/><rect x="7" y="6" width="2" height="12"/><rect x="11" y="3" width="2" height="18"/><rect x="15" y="7" width="2" height="10"/><rect x="19" y="10" width="2" height="4"/>',
+  overdrive: '<path d="M2.5 14h3l1.5-8 2 16 2-12 2 8 1.5-4h7"/>',
+  echo: '<path d="M4 12a8 8 0 1 1 2.6 5.9"/><path d="M4 18.5v-5.5h5.5"/>',
+  reverb: '<path d="M2.5 12a9.5 9.5 0 0 1 19 0"/><path d="M6 12a6 6 0 0 1 12 0"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/>',
+  modulacion: '<path d="M2.5 12c1.4-4.2 2.8-4.2 4.2 0s2.8 4.2 4.2 0 2.8-4.2 4.2 0 2.8 4.2 4.2 0"/>',
+  compresor: '<rect x="8.5" y="6" width="7" height="12" rx="1.5"/><path d="M3 12h4M17 12h4"/><path d="M6.5 9.5 3 12l3.5 2.5M17.5 9.5 21 12l-3.5 2.5"/>',
+  eq: '<line x1="6.5" y1="3.5" x2="6.5" y2="20.5"/><circle cx="6.5" cy="9" r="2"/><line x1="12" y1="3.5" x2="12" y2="20.5"/><circle cx="12" cy="15.5" r="2"/><line x1="17.5" y1="3.5" x2="17.5" y2="20.5"/><circle cx="17.5" cy="7" r="2"/>',
+  gate: '<path d="M4 12h4"/><path d="M9 5.5v13"/><path d="M15 5.5v13"/><path d="M16 12h4"/>',
+  wah: '<path d="M2.5 16c2-.3 3-2 4-5.5S8.5 5 11 5s3.5 2.5 4.5 6 2 5.2 4 5.5"/>',
+  escena: '<path d="M4 6.5h16v11H4z"/><path d="M4 6.5 12 12l8-5.5"/>',
+  generico: '<circle cx="12" cy="12" r="3"/>',
+};
+
+const CATEGORIAS = [
+  [/^amp/, "#FF6B5C", "amp"],
+  [/^cab/, "#B98CFF", "cab"],
+  [/^(nam|rtneural)/, "#E7E7EA", "neural"],
+  [/^(ts9sim|fuzz)/, "#FFA724", "overdrive"],
+  [/^echo/, "#3DD8D0", "echo"],
+  [/^freeverb/, "#3DD68C", "reverb"],
+  [/^chorus/, "#FF6FD8", "modulacion"],
+  [/^compressor/, "#8B93A8", "compresor"],
+  [/^eq/, "#5AA9FF", "eq"],
+  [/^(noise_gate|abgate)/, "#FFE066", "gate"],
+  [/wah/, "#7CE3A8", "wah"],
 ];
-function colorNodo(id) {
-  for (const [re, color] of COLOR_POR_UNIDAD) if (re.test(id)) return color;
-  return "#4A4A55";
+
+function categoria(id) {
+  for (const [re, color, icono] of CATEGORIAS) if (re.test(id)) return { color, icono };
+  return { color: "#4A4A55", icono: "generico" };
 }
+function colorNodo(id) { return categoria(id).color; }
+function iconoSvg(clave, claseExtra) {
+  return `<svg class="${claseExtra}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONOS[clave] || ICONOS.generico}</svg>`;
+}
+
+const LETRAS = ["A", "B", "C", "D", "E", "F", "G", "H"];
+function letra(i) {
+  return i < LETRAS.length ? LETRAS[i] : String.fromCharCode(65 + i); // I, J, ... si hiciera falta
+}
+// Colores para las escenas: no tienen "tipo" como una unidad del rack, así que se ciclan por
+// posición -- da variedad visual sin inventarle una categoría que no existe en el modelo.
+const COLORES_ESCENA = ["#FFA724", "#3DD8D0", "#B98CFF", "#3DD68C", "#FF6FD8", "#5AA9FF", "#FFE066", "#FF6B5C"];
 
 async function pedir(ruta, opciones) {
   const resp = await fetch(ruta, opciones);
@@ -169,11 +205,13 @@ function renderNodos() {
       conector.className = "nodo-conector";
       fila.appendChild(conector);
     }
+    const cat = categoria(id);
     const nodo = document.createElement("button");
     nodo.className = "nodo" + (estadosOnOff[id] ? " encendido" : "") +
       (id === nodoSeleccionado ? " seleccionado" : "");
-    nodo.style.setProperty("--nodo-color", colorNodo(id));
-    nodo.textContent = id;
+    nodo.style.setProperty("--nodo-color", cat.color);
+    nodo.innerHTML = iconoSvg(cat.icono, "nodo-icono") +
+      `<span class="nodo-etiqueta">${escapeHtml(id)}</span>`;
     nodo.addEventListener("click", () => seleccionarNodo(id));
     fila.appendChild(nodo);
   });
@@ -337,16 +375,26 @@ function renderEscenas() {
     return;
   }
 
-  const lista = document.createElement("div");
-  lista.className = "lista-chips";
+  // Grid A-H: cada escena ocupa el tile de su posición en la lista, con letra/color/ícono/
+  // nombre -- pedido explícito el 25/09/2026, siguiendo el estilo de la pantalla STOMP de
+  // Cortex Control que se compartió como referencia (no el contenido: las escenas acá son
+  // variaciones de parámetros dentro de un preset, no unidades del rack -- por eso el ícono es
+  // uno solo genérico de "escena", y el color se cicla por posición en vez de por tipo).
+  const grid = document.createElement("div");
+  grid.className = "escenas-grid";
   estadoLinea.escenas.forEach((nombre, i) => {
-    const chip = document.createElement("button");
-    chip.className = "chip" + (nombre === estadoLinea.escena_activa ? " activo" : "");
-    chip.textContent = nombre;
-    chip.addEventListener("click", () => ejecutarAccion("escena", i));
-    lista.appendChild(chip);
+    const activa = nombre === estadoLinea.escena_activa;
+    const color = COLORES_ESCENA[i % COLORES_ESCENA.length];
+    const tile = document.createElement("button");
+    tile.className = "escena-tile" + (activa ? " activa" : "");
+    tile.style.setProperty("--escena-color", color);
+    tile.innerHTML = `<span class="escena-letra">${letra(i)}</span>` +
+      iconoSvg("escena", "escena-icono") +
+      `<span class="escena-nombre">${escapeHtml(nombre)}</span>`;
+    tile.addEventListener("click", () => ejecutarAccion("escena", i));
+    grid.appendChild(tile);
   });
-  $app.appendChild(lista);
+  $app.appendChild(grid);
 }
 
 function botonAccion(etiqueta, accion, acento) {

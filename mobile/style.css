@@ -2,8 +2,11 @@
   --acento: #FFA724;
   --ok: #3DD68C;
   --error: #FF5C5C;
-  --fondo: #0D0D0F;
-  --panel: #16161A;
+  /* Negro puro a pedido -- toda la interfaz, no un gris casi-negro. La separación entre
+     paneles/tiles la hacen los bordes de color, no el fondo (mismo criterio que las
+     referencias de Cortex Control que se compartieron). */
+  --fondo: #000000;
+  --panel: #000000;
   --borde: #26262E;
   --texto: #F2F1EE;
   --texto-tenue: #8B8B96;
@@ -136,26 +139,40 @@ body {
 
 .nodo {
   flex: 0 0 auto;
-  width: 64px;
-  height: 64px;
-  border-radius: 14px;
+  width: 68px;
+  height: 68px;
+  border-radius: 16px;
   border: 2px solid var(--nodo-color, #4A4A55);
-  background: #16161A;
-  color: var(--texto);
+  background: #000000;
+  color: var(--nodo-color, #8B8B96);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 3px;
   font-family: Archivo, sans-serif;
-  font-size: 10px;
+  font-size: 8px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   text-align: center;
   padding: 4px;
-  opacity: 0.45;
+  opacity: 0.4;
 }
-.nodo.encendido { opacity: 1; background: color-mix(in srgb, var(--nodo-color, #4A4A55) 16%, #16161A); }
+.nodo.encendido {
+  opacity: 1;
+  background: color-mix(in srgb, var(--nodo-color, #4A4A55) 14%, #000000);
+  box-shadow: 0 0 14px -4px var(--nodo-color, transparent);
+}
 .nodo.seleccionado { box-shadow: 0 0 0 2px var(--texto); }
+.nodo-icono { width: 26px; height: 26px; flex-shrink: 0; }
+.nodo-etiqueta {
+  color: var(--texto-tenue);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nodo.encendido .nodo-etiqueta { color: var(--texto); }
 
 .nodo-conector {
   flex: 0 0 20px;
@@ -319,6 +336,47 @@ input[type="range"].paneo::-moz-range-thumb { background: #5AA9FF; }
   font-weight: 600;
 }
 .chip.activo { background: #14201B; border-color: var(--ok); color: var(--texto); }
+
+/* Grid de escenas A-H, estilo tile con letra/icono/nombre -- referencia compartida el
+   25/09/2026 (pantalla STOMP de Cortex Control). Hasta 8 letras porque PRESETS_POR_BANCO=8 en
+   presets/preset_manager.py ya fija ese mismo tope para el resto del sistema; si algún día hay
+   más de 8 escenas por preset, LETRAS se extiende sola (I, J, ...) -- ver app.js. */
+.escenas-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+@media (max-width: 520px) {
+  .escenas-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.escena-tile {
+  position: relative;
+  border-radius: 14px;
+  border: 2px solid var(--escena-color, #4A4A55);
+  background: #000000;
+  padding: 10px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-height: 92px;
+  color: var(--texto-tenue);
+}
+.escena-tile.activa {
+  color: var(--texto);
+  background: color-mix(in srgb, var(--escena-color, #4A4A55) 16%, #000000);
+  box-shadow: 0 0 14px -4px var(--escena-color, transparent);
+}
+.escena-letra {
+  position: absolute;
+  top: 6px;
+  left: 9px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+.escena-icono { width: 24px; height: 24px; color: var(--escena-color, #8B8B96); margin-top: 12px; }
+.escena-nombre { font-size: 11px; font-weight: 600; text-align: center; line-height: 1.25; }
 
 .mensaje-linea {
   font-family: "IBM Plex Mono", monospace;
