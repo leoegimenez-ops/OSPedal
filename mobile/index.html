@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0D0D0F">
-<title>PedalSistema · Monitor</title>
+<title>PedalSistema · Nodos</title>
 <link rel="manifest" href="manifest.json">
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
@@ -19,16 +19,26 @@
   <div class="topbar-right" id="txt-cpu"></div>
 </header>
 
-<div class="modo-switch">
-  <button class="modo-btn activo" id="btn-modo-mezcla" type="button">MEZCLA</button>
-  <button class="modo-btn" id="btn-modo-preset" type="button">PRESET</button>
-</div>
+<div class="contexto" id="contexto" hidden></div>
 
 <main id="app">
   <div class="cargando" id="cargando">Cargando…</div>
 </main>
 
-<nav class="tabs" id="tabs" hidden></nav>
+<nav class="tabs-principales" id="tabs-principales">
+  <button class="tab-principal activo" data-tab="nodos" type="button">
+    <span class="tab-icono">⬡</span>NODOS
+  </button>
+  <button class="tab-principal" data-tab="presets" type="button">
+    <span class="tab-icono">▤</span>PRESETS
+  </button>
+  <button class="tab-principal" data-tab="escenas" type="button">
+    <span class="tab-icono">◈</span>ESCENAS
+  </button>
+  <button class="tab-principal" data-tab="envios" type="button">
+    <span class="tab-icono">≡</span>ENVÍOS
+  </button>
+</nav>
 
 <script src="app.js"></script>
 </body>

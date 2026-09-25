@@ -1,10 +1,11 @@
 {
-  "name": "PedalSistema — Monitor",
-  "short_name": "Monitor",
-  "description": "Control remoto de las mezclas de monitor de PedalSistema",
+  "name": "PedalSistema — Arquitec DSP",
+  "short_name": "Arquitec DSP",
+  "description": "Control remoto de PedalSistema: nodos, presets, escenas y envíos de monitor",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
+  "orientation": "landscape",
   "background_color": "#0D0D0F",
   "theme_color": "#0D0D0F",
   "icons": [
