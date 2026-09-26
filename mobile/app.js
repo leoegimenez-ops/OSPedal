@@ -130,6 +130,7 @@ async function cargarParametros() {
   const ruta = s.id.split("/").map(encodeURIComponent).join("/");
   const r = await api(`${rutaLinea()}/unidad/${ruta}`);
   estado.parametros = r.parametros;
+  estado.archivoBloque = r.archivo || null;     // IR / captura que usa el bloque, si usa
 }
 
 function itemsGrid() {
@@ -636,6 +637,14 @@ function renderPanel() {
   }
   $panel.appendChild(info);
 
+  const ab = !esRuteo && estado.archivoBloque;
+  if (ab) {
+    // Bloque que usa un archivo (IR / captura NAM / AIDA-X): cuál tiene y botón para cambiarlo.
+    const fila = nuevo("button", "panel-archivo",
+      `<span>${esc(NOMBRE_TIPO_ARCHIVO[ab.tipo])}</span><b>${ab.actual ? esc(ab.actual) : "None — choose a file"}</b>`);
+    fila.addEventListener("click", () => elegirArchivo(fila, u, ab.tipo));
+    info.appendChild(fila);
+  }
   const perillas = nuevo("div", "panel-perillas");
   const controles = estado.parametros.filter((p) => !p.nombre.endsWith(".on_off"));
   if (!controles.length) {
@@ -665,6 +674,33 @@ function renderPanel() {
     perillas.appendChild(control);
   }
   $panel.appendChild(perillas);
+}
+
+const NOMBRE_TIPO_ARCHIVO = { ir: "Impulse response", nam: "NAM capture", aidax: "AIDA-X / RTNeural model" };
+
+/* Elegir el archivo de un bloque: la lista sale de la biblioteca del equipo (se suben desde la
+ * pantalla del sistema: SYSTEM › Files). */
+async function elegirArchivo(ancla, u, tipo) {
+  let lista;
+  try { lista = (await api("/archivos"))[tipo] || []; } catch (e) { aviso(e.message, true); return; }
+  if (!lista.length) {
+    aviso(esModoOS() ? "No files yet: add them in SYSTEM › Files" : "No files yet: add them from the system screen (SYSTEM › Files)", true);
+    return;
+  }
+  abrirPopover(ancla, lista.map((a) => ({
+    texto: a.nombre,
+    marca: estado.archivoBloque && estado.archivoBloque.actual === a.nombre,
+    accion: async () => {
+      try {
+        await api(`${rutaLinea()}/archivo_bloque`, { unidad: u.id, nombre: a.nombre });
+        estado.archivoBloque = { tipo, actual: a.nombre };
+        renderPanel();
+        aviso(`${a.nombre} loaded`);
+      } catch (e) {
+        aviso(e.message, true);
+      }
+    },
+  })));
 }
 
 function formatoBalance(v, nombre) {
@@ -1733,6 +1769,7 @@ async function guardarPresetNuevo(banco) {
 
 const SECCIONES_SISTEMA = [
   { id: "conectar", nombre: "Connect a device" },
+  { id: "archivos", nombre: "Files (IR / captures)" },
   { id: "estado", nombre: "Status" },
   { id: "energia", nombre: "Power" },
 ];
@@ -1752,7 +1789,62 @@ function renderSistema() {
   const cuerpo = nuevo("div", "sistema-cuerpo");
   pantalla.append(menu, cuerpo);
   $contenido.appendChild(pantalla);
-  ({ conectar: seccionConectar, estado: seccionEstado, energia: seccionEnergia }[seccion])(cuerpo);
+  ({ conectar: seccionConectar, archivos: seccionArchivos, estado: seccionEstado, energia: seccionEnergia }[seccion])(cuerpo);
+}
+
+const ACEPTA_ARCHIVO = { ir: ".wav,.flac,.aif,.aiff", nam: ".nam", aidax: ".json,.aidax" };
+
+/* Biblioteca de IR y capturas. Subir abre el selector de archivos del equipo (incluye los
+ * pendrives conectados). Se suben de a uno, con el archivo como cuerpo del pedido. */
+async function seccionArchivos(cuerpo) {
+  let lista;
+  try { lista = await api("/archivos"); } catch (e) { cuerpo.textContent = e.message; return; }
+  cuerpo.innerHTML = "";
+  const grilla = nuevo("div", "archivos");
+  for (const tipo of ["ir", "nam", "aidax"]) {
+    const col = nuevo("section", "archivos-col");
+    const cab = nuevo("div", "archivos-cab", `<b>${esc(NOMBRE_TIPO_ARCHIVO[tipo])}</b><small>${lista[tipo].length} file${lista[tipo].length === 1 ? "" : "s"}</small>`);
+    const entrada = nuevo("input");
+    entrada.type = "file";
+    entrada.multiple = true;
+    entrada.accept = ACEPTA_ARCHIVO[tipo];
+    entrada.hidden = true;
+    const subir = nuevo("button", "pildora on", "UPLOAD");
+    subir.addEventListener("click", () => entrada.click());
+    entrada.addEventListener("change", async () => {
+      for (const f of entrada.files) {
+        aviso(`Uploading ${f.name}…`);
+        try {
+          const r = await fetch(`/archivos/${tipo}?nombre=${encodeURIComponent(f.name)}`, {
+            method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Cliente": ID_CLIENTE }, body: f,
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+          aviso(`${d.nombre} added`);
+        } catch (e) {
+          aviso(`${f.name}: ${e.message}`, true);
+        }
+      }
+      seccionArchivos(cuerpo);
+    });
+    cab.append(subir, entrada);
+    col.appendChild(cab);
+    const ul = nuevo("div", "archivos-lista");
+    if (!lista[tipo].length) ul.appendChild(nuevo("div", "vacio", "No files yet"));
+    for (const a of lista[tipo]) {
+      const fila = nuevo("div", "archivo", `<span>${esc(a.nombre)}</span><small>${a.kb} KB</small>`);
+      const borrar = botonConfirmado("Delete", "", "peligro mini", async () => {
+        await api(`/archivos/${tipo}/borrar`, { nombre: a.nombre });
+        aviso(`${a.nombre} deleted`);
+        seccionArchivos(cuerpo);
+      });
+      fila.appendChild(borrar);
+      ul.appendChild(fila);
+    }
+    col.appendChild(ul);
+    grilla.appendChild(col);
+  }
+  cuerpo.appendChild(grilla);
 }
 
 async function infoSistema() {

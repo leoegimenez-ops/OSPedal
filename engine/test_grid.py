@@ -384,5 +384,20 @@ c5.fijar_parametros({"ts9sim.drive": 0.7})
 check("sin escena activa, mover perillas no toca ninguna escena",
       p5.escena("Verso").parametros["ts9sim.drive"] == 0.5 and "ts9sim.drive" not in p5.escena("Coro").parametros)
 
+print("\n16. Convolver (IR): se re-enciende despues de cargar el archivo")
+import time as _time  # noqa: E402
+
+m6 = MotorFalso()
+c6 = ControladorEscenario(Setlist(nombre="T", bancos=[Banco("A", [Preset("Uno")])]), m6)
+conv = {"jconv.IRFile": "cab.wav", "jconv.IRDir": "/x"}
+c6.reencender_convolvers({"jconv_mono.convolver": conv, "jconv_mono.on_off": True}, demora=0.01)
+c6.reencender_convolvers({"jconv.convolver": conv, "jconv.on_off": False}, demora=0.01)
+c6.reencender_convolvers({"a/jconv_mono.convolver": conv}, demora=0.01)
+_time.sleep(0.2)
+check("encendido: se vuelve a prender (Guitarix no deja prenderlo sin IR cargado)",
+      m6.valores.get("jconv_mono.on_off") == 1)
+check("en bypass a proposito: se respeta", "jconv.on_off" not in m6.valores)
+check("tambien en otra linea (id calificado)", m6.valores.get("a/jconv_mono.on_off") == 1)
+
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

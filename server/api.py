@@ -65,7 +65,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from engine.categorias import CATEGORIAS, categoria, fijos, insertables, nombres
+from engine.categorias import CATEGORIAS, categoria, fijos, insertables, nombres, nombres_de_archivo
 from engine.controlador import ControladorEscenario
 from engine.disposicion import AMP, MERGE, SPLIT, ErrorDisposicion, GestorLineas
 from engine.midi_engine import Accion
@@ -323,10 +323,12 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="PedalSistema", lifespan=lifespan)
 
+from server import archivos                               # noqa: E402 -- IR / NAM / AIDA-X
 from server.sistema import exigir_local                 # noqa: E402
 from server.sistema import router as _router_sistema   # noqa: E402 -- funciones del OS (pantalla local)
 
 app.include_router(_router_sistema)
+app.include_router(archivos.router)
 
 
 @app.exception_handler(GuitarixError)
@@ -967,6 +969,10 @@ def _parametros_unidad(crudo: dict[str, Any]) -> list[dict[str, Any]]:
     for nombre, meta in crudo.items():
         if meta.get("type") not in _TIPOS_RENDERIZABLES:
             continue
+        if nombre.endswith(".s_h"):
+            # "show/hide": si la GUI de escritorio de Guitarix muestra el bloque. No es sonido;
+            # aparecía como un interruptor "S H" sin sentido en el panel (visto 26/09/2026).
+            continue
         parametros.append({
             "nombre": nombre,
             "etiqueta": meta.get("name") or nombre.rsplit(".", 1)[-1],
@@ -1006,9 +1012,47 @@ def unidad_linea(linea: str, unidad: str) -> dict:
     if not crudo:
         raise HTTPException(404, f"unidad desconocida o sin parámetros: {unidad!r}")
     parametros = _parametros_unidad(crudo)
+    tipo_archivo = archivos.tipo_de_bloque(separar(unidad)[1])
+    info_archivo = None
+    if tipo_archivo:
+        valores = ctrl.rpc.obtener(*nombres_de_archivo(unidad))
+        info_archivo = {"tipo": tipo_archivo, "actual": archivos.archivo_actual(tipo_archivo, valores, unidad)}
     for p in parametros:
         p["de_escena"] = p["nombre"] in propios
-    return {"unidad": unidad, "escena": ctrl.escena_activa, "parametros": parametros}
+    return {"unidad": unidad, "escena": ctrl.escena_activa, "parametros": parametros,
+            "archivo": info_archivo}
+
+
+class ArchivoDeBloque(BaseModel):
+    unidad: str          # id calificado del bloque ("jconv_mono", "a/nam", ...)
+    nombre: str          # archivo de la biblioteca (models/irs, models/nam, models/aidax)
+
+
+@app.post("/lineas/{linea}/archivo_bloque")
+def archivo_de_bloque(linea: str, datos: ArchivoDeBloque) -> dict:
+    """Elegir qué IR o captura usa un bloque. Desde cualquier pantalla: es un ajuste de sonido
+    como una perilla (subir/borrar archivos, en cambio, solo desde la pantalla del equipo). Pasa
+    por el controlador: con una escena activa queda propio de esa escena, y 💾 lo guarda."""
+    ctrl = _linea(linea)
+    tipo = archivos.tipo_de_bloque(separar(datos.unidad)[1])
+    if tipo is None:
+        raise HTTPException(400, f"{datos.unidad!r} doesn't use files")
+    actual_conv = None
+    if tipo == "ir":
+        actual_conv = ctrl.rpc.obtener(f"{datos.unidad}.convolver").get(f"{datos.unidad}.convolver")
+    pares = archivos.pares_para_bloque(datos.unidad, separar(datos.unidad)[1], tipo, datos.nombre, actual_conv)
+    try:
+        valores = dict(zip(pares[::2], pares[1::2]))
+        ctrl.fijar_parametros(valores)
+        # Elegir un archivo prende el bloque (como en Cortex). El convolucionador recién acepta
+        # prenderse cuando terminó de cargar el IR: ver ControladorEscenario.reencender_convolvers.
+        if tipo == "ir":
+            ctrl.reencender_convolvers({**valores, f"{datos.unidad}.on_off": 1})
+        else:
+            ctrl.fijar_parametros({f"{datos.unidad}.on_off": 1})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "tipo": tipo, "actual": datos.nombre}
 
 
 def _proximo_evento(gx: GuitarixRPC) -> dict | None:

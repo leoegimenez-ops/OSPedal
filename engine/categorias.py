@@ -125,6 +125,23 @@ def insertables(pluginlist: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return salida
 
 
+# Bloques que usan un archivo (IR o captura) y los parámetros que lo guardan: no son perillas
+# (float/bool), así que capturar() los agrega aparte para que el preset recuerde el archivo.
+# Verificado contra Guitarix 0.47.0 (ver server/archivos.py).
+PARAMETROS_ARCHIVO: dict[str, tuple[str, ...]] = {
+    "jconv": ("convolver",), "jconv_mono": ("convolver",),
+    "nam": ("loadpath", "flist"), "snam": ("loadpath", "flist"), "mnam": ("loadpath", "flist"),
+    "rtneural": ("loadpath", "flist"), "srtneural": ("loadpath", "flist"),
+    "mrtneural": ("loadpath", "flist"),
+}
+
+
+def nombres_de_archivo(unidad: str) -> list[str]:
+    """unidad calificada ("a/jconv") -> ["a/jconv.convolver"]; [] si no usa archivos."""
+    base = unidad.split("/", 1)[-1]
+    return [f"{unidad}.{p}" for p in PARAMETROS_ARCHIVO.get(base, ())]
+
+
 # Tempo: qué parámetro de cada delay sigue al BPM del preset (la ventana Tempo / TAP).
 # Relevado con queryunit el 25/09/2026: la mayoría tiene un parámetro BPM nativo [24..360]; los
 # que van en ms reciben la negra (60000 / bpm) dentro de su rango. Los multibanda (mbdel, mbe)

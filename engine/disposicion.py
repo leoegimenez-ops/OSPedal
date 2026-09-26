@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from engine.categorias import PGN_STEREO
+from engine.categorias import PGN_STEREO, nombres_de_archivo
 from engine.motor_linea import calificar, separar
 from presets.preset_manager import valor_rpc
 
@@ -256,6 +256,10 @@ class GestorLineas:
                     valor = (meta.get("value") or {}).get(nombre)
                     if tipo in ("float", "bool") and valor is not None:
                         parametros[nombre] = bool(valor) if tipo == "bool" else valor
+                archivos = nombres_de_archivo(q)
+                if archivos:
+                    parametros.update({n: v for n, v in self.rpc.obtener(*archivos).items()
+                                       if v not in (None, "", {})})
         from engine.ruteo import PARAMETROS as RUTEO   # noqa: PLC0415
         parametros.update({n: v for n, v in self.rpc.obtener(*RUTEO).items() if v is not None})
         return parametros

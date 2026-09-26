@@ -5,6 +5,8 @@ models/irs/*
 !models/nam/.gitkeep
 !models/aidax/.gitkeep
 !models/irs/.gitkeep
+# Carpetas-enlace de las capturas NAM/AIDA-X cargadas en los bloques (server/archivos.py)
+models/.cargados/
 
 # Setlists de trabajo (las escribe el botón de guardar de la app; el ejemplo sí va al repo)
 presets/setlists/

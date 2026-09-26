@@ -29,6 +29,8 @@ from engine.rpc_client import GuitarixRPC
 # que lee la variable al cargar el módulo.
 _DIR_SETLISTS_TEST = tempfile.mkdtemp(prefix="setlists_test_")
 os.environ["SETLISTS_DIR"] = _DIR_SETLISTS_TEST
+_DIR_MODELOS_TEST = tempfile.mkdtemp(prefix="modelos_test_")
+os.environ["PS_MODELOS"] = _DIR_MODELOS_TEST
 
 import server.api as api  # noqa: E402
 
@@ -120,6 +122,8 @@ class GXFalso:
             {"id": "freeverb", "flags": 0x10108, "name": "Freeverb", "category": "Reverb"},
             {"id": "echo", "flags": 0x10108, "name": "Echo", "category": "Echo / Delay"},
             {"id": "chorus", "flags": 0x109, "name": "Chorus", "category": "Modulation"},
+            {"id": "jconv_mono", "flags": 0x10108, "name": "Convolver Mono", "category": "Reverb"},
+            {"id": "nam", "flags": 0x10108, "name": "Neural Amp Modeler", "category": "Neural"},
         ]
 
     def consultar_unidad(self, unidad):
@@ -558,7 +562,7 @@ r = client.get("/lineas/guitarra1/plugins")
 cats = r.json()["categorias"]
 ids = [p["id"] for c in cats for p in c["plugins"]]
 check("orden de la leyenda y solo categorias con modelos",
-      [c["id"] for c in cats] == ["amp", "overdrive", "modulation", "delay", "reverb"],
+      [c["id"] for c in cats] == ["amp", "neural", "ir", "overdrive", "modulation", "delay", "reverb"],
       f"-> {[c['id'] for c in cats]}")
 check("12AX7 (variante interna) no aparece", "12AX7" not in ids, f"-> {ids}")
 check("los fijos que tumban al motor (noise_gate) no aparecen",
@@ -792,6 +796,59 @@ check("guardar el sonido actual como preset nuevo: queda en el primer lugar libr
       f"-> {r.text[:250]}")
 r = client.post("/lineas/guitarra1/presets/nuevo", json={"banco": 0, "nombre": "X"}, headers={"X-Forwarded-For": "10.0.0.5"})
 check("preset nuevo desde otro dispositivo: 403", r.status_code == 403)
+
+print("\n27f. Archivos: IR y capturas (subir/borrar solo local; elegir desde cualquier pantalla)")
+reset()
+import io as _io     # noqa: E402
+import wave as _wave  # noqa: E402
+
+_buf = _io.BytesIO()
+with _wave.open(_buf, "wb") as _w:
+    _w.setnchannels(1); _w.setsampwidth(2); _w.setframerate(48000); _w.writeframes(b"\x00\x00" * 480)
+wav = _buf.getvalue()
+r = client.post("/archivos/ir", params={"nombre": "Mesa 4x12.wav"}, content=wav,
+                headers={"Cf-Connecting-Ip": "181.1.2.3"})
+check("subir desde el tunel: 403", r.status_code == 403)
+r = client.post("/archivos/ir", params={"nombre": "Mesa 4x12.wav"}, content=wav)
+check("subir un IR desde la pantalla del equipo", r.status_code == 200 and r.json()["nombre"] == "Mesa 4x12.wav",
+      f"-> {r.status_code} {r.text}")
+r = client.post("/archivos/ir", params={"nombre": "../../etc/passwd.wav"}, content=wav)
+check("un nombre con ../ no sale de la carpeta", r.status_code == 200
+      and (Path(_DIR_MODELOS_TEST) / "irs" / "passwd.wav").exists(), f"-> {r.text}")
+r = client.post("/archivos/ir", params={"nombre": "nota.txt"}, content=b"hola")
+check("extension equivocada: 400", r.status_code == 400)
+r = client.post("/archivos/nam", params={"nombre": "falso.nam"}, content=b"RIFF....")
+check("contenido que no es un modelo: 400", r.status_code == 400)
+r = client.post("/archivos/nam", params={"nombre": "Plexi.nam"}, content=b'{"version": "0.5.2", "weights": []}')
+check("subir una captura NAM", r.status_code == 200)
+lista = client.get("/archivos").json()
+check("listar", [a["nombre"] for a in lista["ir"]] == ["Mesa 4x12.wav", "passwd.wav"]
+      and [a["nombre"] for a in lista["nam"]] == ["Plexi.nam"], f"-> {lista}")
+r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "jconv_mono"})
+check("agregar el bloque de IR", r.status_code == 200, f"-> {r.status_code} {r.text[:100]}")
+r = client.post("/lineas/guitarra1/archivo_bloque", json={"unidad": "jconv_mono", "nombre": "Mesa 4x12.wav"},
+                headers={"Cf-Connecting-Ip": "181.1.2.3"})
+fake = api._linea("guitarra1").rpc
+conv = fake.valores.get("jconv_mono.convolver", {})
+check("elegir el IR de un bloque (tambien desde el celular)", r.status_code == 200
+      and conv.get("jconv.IRFile") == "Mesa 4x12.wav" and conv.get("jconv.Length") == 480, f"-> {r.text} {conv}")
+client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "nam"})
+r = client.post("/lineas/guitarra1/archivo_bloque", json={"unidad": "nam", "nombre": "Plexi.nam"})
+carpeta_nam = fake.valores.get("nam.loadpath", "")
+check("captura NAM: carpeta propia con un solo archivo, flist=1",
+      r.status_code == 200 and fake.valores.get("nam.flist") == 1
+      and [p.name for p in Path(carpeta_nam).iterdir()] == ["Plexi.nam"], f"-> {carpeta_nam}")
+client.post("/lineas/guitarra1/guardar")
+p0 = json.loads((Path(_DIR_SETLISTS_TEST) / "guitarra1.json").read_text(encoding="utf-8"))["bancos"][0]["presets"][0]
+check("💾 guarda que archivo usa cada bloque",
+      p0["parametros"].get("jconv_mono.convolver", {}).get("jconv.IRFile") == "Mesa 4x12.wav"
+      and p0["parametros"].get("nam.loadpath") == carpeta_nam, f"-> {sorted(p0['parametros'])}")
+r = client.post("/lineas/guitarra1/archivo_bloque", json={"unidad": "ts9sim", "nombre": "Mesa 4x12.wav"})
+check("un bloque que no usa archivos: 400", r.status_code == 400)
+r = client.post("/archivos/ir/borrar", json={"nombre": "passwd.wav"}, headers={"X-Forwarded-For": "10.0.0.9"})
+check("borrar desde otro dispositivo: 403", r.status_code == 403)
+r = client.post("/archivos/ir/borrar", json={"nombre": "passwd.wav"})
+check("borrar desde la pantalla", r.status_code == 200 and not (Path(_DIR_MODELOS_TEST) / "irs" / "passwd.wav").exists())
 
 print("\n28. Sincronia: un cambio en una pantalla llega a las demas por /sync")
 with client.websocket_connect("/sync") as ws:

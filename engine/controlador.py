@@ -9,12 +9,13 @@ preset suena, en qué modo está y qué stomps se pisaron desde que se cargó el
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 
-from engine.categorias import fijos, pares_tempo
+from engine.categorias import fijos, nombres_de_archivo, pares_tempo
 from engine.midi_engine import Accion
 from presets.preset_manager import (
     CADENAS, MAX_ESCENAS, MAX_PRESETS, PRESETS_POR_BANCO, Escena, Preset, Setlist, valor_rpc,
@@ -148,8 +149,31 @@ class ControladorEscenario:
             for nombre, valor in valores.items():
                 planos += [nombre, valor]
             self.rpc.fijar(*planos)
+            self.reencender_convolvers(valores)
         if incluir_base and self.tempo_bpm:
             self._aplicar_tempo()
+
+    def reencender_convolvers(self, valores: dict[str, Any], demora: float = 0.4) -> None:
+        """Guitarix no deja prender un convolucionador (jconv / jconv_mono) mientras no tiene
+        IR, y el IR se carga en segundo plano: un `on_off=1` que llega pegado al IR se pierde y
+        el bloque queda en bypass. Verificado en vivo el 26/09/2026. Se vuelve a mandar un rato
+        después, en otro hilo, para no demorar el cambio de preset (el cliente RPC tiene lock)."""
+        encender = []
+        for nombre, valor in valores.items():
+            if nombre.endswith(".convolver") and isinstance(valor, dict) and valor.get("jconv.IRFile"):
+                unidad = nombre[: -len(".convolver")]
+                if valores.get(f"{unidad}.on_off", True) not in (False, 0):
+                    encender += [f"{unidad}.on_off", 1]
+        if encender:
+            hilo = threading.Timer(demora, self._fijar_seguro, args=encender)
+            hilo.daemon = True
+            hilo.start()
+
+    def _fijar_seguro(self, *pares: Any) -> None:
+        try:
+            self.rpc.fijar(*pares)
+        except Exception:  # noqa: BLE001 -- hilo aparte: un motor caído no debe romper nada
+            pass
 
     # -- Tempo --------------------------------------------------------------------------
 
@@ -259,6 +283,11 @@ class ControladorEscenario:
                     if valor is None:
                         continue
                     parametros[nombre] = bool(valor) if tipo == "bool" else valor
+            archivos = [n for u in unidades for n in nombres_de_archivo(u)]
+            if archivos:
+                # IR y capturas NAM/AIDA-X: el preset recuerda qué archivo usa cada bloque.
+                parametros.update({n: v for n, v in self.rpc.obtener(*archivos).items()
+                                   if v not in (None, "", {})})
         if self.lineas is not None:
             parametros.update(self.lineas.capturar_extra())   # líneas A/B/post y SPLIT/MERGE
         return cadena, parametros

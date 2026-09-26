@@ -148,8 +148,8 @@
       }
     },
     "valorParametro": {
-      "description": "Guitarix acepta parametros float, int, bool, string y enum (por nombre).",
-      "type": ["number", "boolean", "string"]
+      "description": "Guitarix acepta parametros float, int, bool, string y enum (por nombre). Objeto solo para '<bloque>.convolver' (el IR de jconv/jconv_mono: jconv.IRFile, jconv.IRDir, ...).",
+      "type": ["number", "boolean", "string", "object"]
     }
   }
 }

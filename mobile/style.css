@@ -1191,3 +1191,27 @@ body {
 .tile-preset.guardar-aqui { border-color: var(--activo); border-style: dashed; color: var(--activo); cursor: pointer; }
 .tile-preset.guardar-aqui .nombre { font-size: 14px; }
 .pista-os { flex-shrink: 0; text-align: center; color: var(--muy-tenue); font-size: 12px; }
+
+/* -- Archivos (IR / capturas) -------------------------------------------------------------------- */
+
+.panel-archivo {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  padding: 7px 10px; border-radius: 9px; border: 1px solid var(--borde); background: var(--sup);
+}
+.panel-archivo span { font-size: 10.5px; color: var(--tenue); text-transform: uppercase; letter-spacing: .05em; }
+.panel-archivo b { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+.archivos { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; align-items: start; }
+.archivos-col { border: 1px solid var(--borde); border-radius: 14px; background: #0E0E10; overflow: hidden; }
+.archivos-cab { display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 14px; border-bottom: 1px solid var(--borde); }
+.archivos-cab b { font-size: 14px; }
+.archivos-cab small { color: var(--tenue); margin-right: auto; }
+.archivos-cab .pildora { flex: 0 0 auto; padding: 0 14px; }
+.archivos-lista { max-height: 52vh; overflow: auto; }
+.archivos-lista .vacio { padding: 16px 14px; color: var(--muy-tenue); font-size: 13px; }
+.archivo { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 14px; border-bottom: 1px solid #1A1A1E; }
+.archivo span { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archivo small { color: var(--tenue); font-size: 11px; }
+.energia.mini { min-height: 0; padding: 6px 10px; border-radius: 8px; flex-direction: row; align-items: center; gap: 6px; }
+.energia.mini b { font-size: 12px; }
+.energia.mini small { font-size: 10.5px; }
+.energia.mini small:empty { display: none; }

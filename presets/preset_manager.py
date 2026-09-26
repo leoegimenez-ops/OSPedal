@@ -60,7 +60,11 @@ def _parametros(datos: dict[str, Any], ruta: str) -> dict[str, Any]:
     crudo = datos.get("parametros", {})
     _exigir(isinstance(crudo, dict), f"{ruta}.parametros", "debe ser un objeto")
     for nombre, valor in crudo.items():
-        _exigir(isinstance(valor, TIPOS_VALOR), f"{ruta}.parametros.{nombre}",
+        # El IR de un convolucionador es un objeto ({"jconv.IRFile": ..., "jconv.IRDir": ...}):
+        # único parámetro no escalar que se guarda (ver engine/categorias.PARAMETROS_ARCHIVO).
+        escalar_u_objeto_ir = isinstance(valor, TIPOS_VALOR) or (
+            isinstance(valor, dict) and nombre.endswith(".convolver"))
+        _exigir(escalar_u_objeto_ir, f"{ruta}.parametros.{nombre}",
                 f"tipo no soportado: {type(valor).__name__}")
     return dict(crudo)
 
