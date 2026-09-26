@@ -55,7 +55,7 @@
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/valorParametro" }
         },
-        "tempo_bpm": { "type": "number", "minimum": 20, "maximum": 300 },
+        "tempo_bpm": { "type": "number", "minimum": 20, "maximum": 360 },
         "volumen": { "type": "number", "minimum": 0, "maximum": 1 },
         "stomps": {
           "description": "Asignacion de pedales en modo Stomp. Cada uno controla el on/off de una unidad del rack.",
@@ -100,6 +100,12 @@
           "description": "Estado inicial al cargar el preset.",
           "type": "boolean",
           "default": false
+        },
+        "pie": {
+          "description": "Pie de la pedalera donde está asignado: 0..7 = A..H. Sin este campo, manda el orden de la lista (el primero es A).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
         }
       }
     },

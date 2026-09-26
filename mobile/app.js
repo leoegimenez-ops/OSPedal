@@ -268,7 +268,12 @@ function renderGrid() {
       b.title = u.nombre;
       b.dataset.id = u.id;
       b.style.setProperty("--color", cat(u.categoria).color);
-      habilitarArrastre(b, f, fila.estereo, () => seleccionarBloque(u.id, fila.estereo));
+      if (u.pie !== null && u.pie !== undefined) {
+        b.appendChild(nuevo("span", "insignia-pie", LETRAS[u.pie]));
+      }
+      habilitarArrastre(b, f, fila.estereo, () => seleccionarBloque(u.id, fila.estereo),
+        () => menuStomp(b, u));
+      b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); menuStomp(b, u); });
       f.appendChild(b);
     }
 
@@ -329,10 +334,12 @@ function dibujarLineas(lienzo, lineasSvg) {
  * que se corre entre los demás bloques de SU fila. Al soltar se manda el orden nuevo al
  * servidor, que reordena el rack y renumera el audio -- el cambio suena, no es solo visual.
  * Mono y estéreo son cadenas distintas del motor: un bloque no pasa de una fila a la otra. */
-function habilitarArrastre(el, fila, estereo, alTocar) {
+function habilitarArrastre(el, fila, estereo, alTocar, alMantener) {
   let inicio = null;
   let fantasma = null;
   let ordenInicial = null;
+  let tMantener = null;
+  const MANTENER_MS = 500;   // mantener apretado sin mover = menú del bloque (stomp A-H)
 
   const idsFila = () => [...fila.querySelectorAll(".bloque[data-id]")].map((b) => b.dataset.id);
 
@@ -349,7 +356,24 @@ function habilitarArrastre(el, fila, estereo, alTocar) {
     addEventListener("pointermove", alMover);
     addEventListener("pointerup", alSoltar);
     addEventListener("pointercancel", alCancelar);
+    clearTimeout(tMantener);
+    if (alMantener && ev.pointerType !== "mouse") {   // con mouse está el clic derecho
+      tMantener = setTimeout(() => {
+        if (!inicio || fantasma) return;
+        soltarEscuchas();
+        inicio = null;
+        if (navigator.vibrate) navigator.vibrate(15);
+        alMantener();
+      }, MANTENER_MS);
+    }
   });
+
+  function soltarEscuchas() {
+    clearTimeout(tMantener);
+    removeEventListener("pointermove", alMover);
+    removeEventListener("pointerup", alSoltar);
+    removeEventListener("pointercancel", alCancelar);
+  }
 
   function mover(ev) {
     if (!inicio || ev.pointerId !== inicio.id) return;
@@ -357,6 +381,7 @@ function habilitarArrastre(el, fila, estereo, alTocar) {
     const dy = ev.clientY - inicio.y;
     if (!fantasma) {
       if (Math.hypot(dx, dy) < 8) return;
+      clearTimeout(tMantener);
       ordenInicial = idsFila();
       const r = el.getBoundingClientRect();
       fantasma = el.cloneNode(true);
@@ -393,9 +418,7 @@ function habilitarArrastre(el, fila, estereo, alTocar) {
   async function terminar(ev, cancelado) {
     if (!inicio || ev.pointerId !== inicio.id) return;
     inicio = null;
-    removeEventListener("pointermove", alMover);
-    removeEventListener("pointerup", alSoltar);
-    removeEventListener("pointercancel", alCancelar);
+    soltarEscuchas();
     if (!fantasma) {
       if (!cancelado) alTocar();
       return;
@@ -937,6 +960,46 @@ function abrirPopover(ancla, items, pie) {
     $popover.appendChild(b);
   }
   if (pie) $popover.appendChild(nuevo("div", "estado-linea", esc(pie)));
+  ubicarPopover(ancla);
+}
+
+/* Mantener apretado un bloque (o clic derecho): asignarlo a un pie A-H de la pedalera. Cada
+ * letra muestra qué tiene hoy; elegir una ocupada la reemplaza, como en Cortex. */
+function menuStomp(ancla, u) {
+  const ocupados = {};
+  for (const s of (estado.linea_estado ? estado.linea_estado.stomps : [])) ocupados[s.pie] = s;
+  $popover.innerHTML = "";
+  $popover.appendChild(nuevo("div", "pop-titulo", `Assign <b>${esc(u.nombre)}</b> to stomp`));
+  const grilla = nuevo("div", "pop-letras");
+  LETRAS.forEach((letra, pie) => {
+    const s = ocupados[pie];
+    const propio = s && s.unidad === u.id;
+    const b = nuevo("button", "pop-letra" + (propio ? " actual" : "") + (s && !propio ? " ocupada" : ""),
+      `<b>${letra}</b><small>${s ? esc(propio ? "Current" : s.etiqueta) : "Free"}</small>`);
+    b.addEventListener("click", () => { cerrarCapas(); asignarStomp(u, pie); });
+    grilla.appendChild(b);
+  });
+  $popover.appendChild(grilla);
+  if (u.pie !== null && u.pie !== undefined) {
+    const quitar = nuevo("button", "pop-quitar", "Remove from stomp");
+    quitar.addEventListener("click", () => { cerrarCapas(); asignarStomp(u, null); });
+    $popover.appendChild(quitar);
+  }
+  ubicarPopover(ancla);
+}
+
+async function asignarStomp(u, pie) {
+  try {
+    estado.linea_estado = await api(`${rutaLinea()}/stomps`, { unidad: u.id, pie });
+    await recargarGrid();
+    render();
+    aviso(pie === null ? `${u.nombre} removed from stomps` : `${u.nombre} → stomp ${LETRAS[pie]}`);
+  } catch (e) {
+    aviso(e.message, true);
+  }
+}
+
+function ubicarPopover(ancla) {
   mostrarCapa(true);
   $popover.hidden = false;
   const r = ancla.getBoundingClientRect();
@@ -1005,13 +1068,20 @@ function switchesStomp() {
     for (const u of fila.unidades) enGrid[u.id] = u;
   }
   if (e.stomps.length) {
-    return e.stomps.slice(0, 8).map((s, i) => ({
-      nombre: enGrid[s.unidad] ? enGrid[s.unidad].nombre : s.etiqueta,
-      categoria: s.categoria,
-      on: s.activo,
-      fueraDeGrid: s.en_cadena === false,
-      pisar: () => accion("toggle_stomp", i),
-    }));
+    // Cada stomp en SU letra (pie de la pedalera); las letras libres quedan como hueco.
+    const slots = new Array(8).fill(null);
+    for (const s of e.stomps) {
+      if (s.pie < 0 || s.pie > 7) continue;
+      slots[s.pie] = {
+        nombre: enGrid[s.unidad] ? enGrid[s.unidad].nombre : s.etiqueta,
+        categoria: s.categoria,
+        on: s.activo,
+        fueraDeGrid: s.en_cadena === false,
+        pisar: () => accion("toggle_stomp", s.pie),
+      };
+    }
+    while (slots.length && slots[slots.length - 1] === null) slots.pop();
+    return slots;
   }
   const unidades = [];
   for (const fila of (estado.grid ? estado.grid.filas : [])) {
@@ -1050,6 +1120,10 @@ function renderGig() {
     const sw = switchesStomp();
     if (!sw.length) tiles.appendChild(nuevo("div", "mensaje-centro", "No blocks in the grid yet."));
     sw.forEach((s, i) => {
+      if (!s) {
+        tiles.appendChild(nuevo("div", "tile libre", `<div class="tile-letra">${LETRAS[i]}</div>`));
+        return;
+      }
       const c = cat(s.categoria);
       const t = nuevo("button", "tile " + (s.on && !s.fueraDeGrid ? "on" : "off"),
         `<div class="tile-icono">${svg(c.icono)}</div><div class="tile-letra">${LETRAS[i]}</div>` +

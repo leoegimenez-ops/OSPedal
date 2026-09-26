@@ -90,6 +90,9 @@ class MotorFalso:
             salida[nombre] = {"type": tipo, "value": {nombre: valor}}
         return salida
 
+    def obtener(self, *nombres):
+        return {n: self.valores.get(n) for n in nombres}
+
     def set_preset(self, b, p):
         self.llamadas.append(("setpreset", b, p))
 
@@ -307,6 +310,41 @@ for _ in range(4):
     t[0] += 0.5
 check("TAP cada 0.5 s -> 120 BPM y sincroniza", c3.tempo_bpm == 120 and m3.valores.get("echo.bpm") == 120,
       f"-> {c3.tempo_bpm} / {m3.valores.get('echo.bpm')}")
+
+print("\n14. Asignar stomp A-H desde el GRID")
+from presets.preset_manager import Stomp  # noqa: E402
+
+m4 = MotorFalso()
+m4.rack[0] = ["ampstack", "ts9sim", "echo"]
+m4.valores["echo.on_off"] = 1
+p4 = Preset("Uno", stomps=[Stomp("CHORUS", "chorus"), Stomp("DELAY", "echo_viejo")])  # A y B (orden)
+c4 = ControladorEscenario(Setlist(nombre="T", bancos=[Banco("A", [p4])]), m4)
+c4.asignar_stomp("ts9sim", 2, "Tube Screamer")          # C
+check("queda en el pie C", c4.preset.stomp_en_pie(2).unidad == "ts9sim")
+check("los viejos no cambian de letra", c4.preset.stomp_en_pie(0).unidad == "chorus"
+      and c4.preset.stomp_en_pie(1).unidad == "echo_viejo")
+c4.asignar_stomp("echo", 0, "Echo")                     # A: desplaza al chorus
+check("reemplaza al que ocupaba A", c4.preset.stomp_en_pie(0).unidad == "echo"
+      and all(s.unidad != "chorus" for s in c4.preset.stomps))
+check("arranca con el on/off real del bloque (no cambia el sonido)", c4.stomp_activo(0) is True)
+c4.asignar_stomp("echo", 5, "Echo")                     # mover de A a F
+check("mover de letra: sale de A, queda en F",
+      c4.preset.stomp_en_pie(0) is None and c4.preset.stomp_en_pie(5).unidad == "echo")
+m4.llamadas.clear()
+c4.ejecutar(Accion.TOGGLE_STOMP, 5)                     # pisar F
+check("pisar F apaga el echo", ("set", "echo.on_off", 0) in m4.llamadas, f"-> {m4.llamadas}")
+check("pisar un pie vacio no rompe", c4.ejecutar(Accion.TOGGLE_STOMP, 0).startswith("Sin stomp"))
+c4.asignar_stomp("echo", None, "Echo")
+check("quitar de la pedalera", c4.preset.stomp_en_pie(5) is None)
+dic = c4.preset.a_dict()
+check("round trip a disco con 'pie'",
+      Preset.desde_dict(dic, "p").pies_de_stomps() == c4.preset.pies_de_stomps(), f"-> {dic.get('stomps')}")
+try:
+    Preset.desde_dict({"nombre": "X", "stomps": [{"etiqueta": "a", "unidad": "u1", "pie": 3},
+                                                 {"etiqueta": "b", "unidad": "u2", "pie": 3}]}, "p")
+    check("rechaza dos stomps en el mismo pie", False)
+except ValueError as e:
+    check("rechaza dos stomps en el mismo pie", "mismo pie" in str(e), f"-> {e}")
 
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

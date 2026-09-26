@@ -398,11 +398,12 @@ def _estado_linea(ctrl: ControladorEscenario, linea: str | None = None) -> dict:
             {
                 "etiqueta": s.etiqueta,
                 "unidad": s.unidad,
-                "activo": ctrl.stomp_activo(i),
+                "pie": pie,
+                "activo": ctrl.stomp_activo(pie),
                 "categoria": categoria(s.unidad, cats_gx.get(s.unidad)),
                 "en_cadena": None if en_rack is None else s.unidad in en_rack,
             }
-            for i, s in enumerate(preset.stomps)
+            for pie, s in sorted(preset._pies(preset.stomps), key=lambda x: x[0])
         ],
         "escenas": [e.nombre for e in preset.escenas],
         "advertencia": ctrl.advertencia,
@@ -474,6 +475,7 @@ def _grid(linea: str) -> dict:
     nombre_de = nombres(todos)
     cat_gx = {p["id"]: p.get("category") for p in todos if p.get("id")}
     no_quitables = fijos(todos)
+    pies = ctrl.preset.pies_de_stomps()
     filas = []
     for clave, estereo in (("mono", 0), ("estereo", 1)):
         ids = list(ctrl.rpc.orden_rack(estereo))
@@ -488,6 +490,7 @@ def _grid(linea: str) -> dict:
                     "categoria": categoria(u, cat_gx.get(u)),
                     "encendido": bool(encendido.get(f"{u}.on_off")),
                     "fijo": u in no_quitables,
+                    "pie": pies.get(u),          # letra de la pedalera (0..7) o None
                 }
                 for u in ids
             ],
@@ -576,6 +579,28 @@ def ordenar_fila(linea: str, datos: OrdenarFila) -> dict:
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return _grid(linea)
+
+
+class AsignarStomp(BaseModel):
+    unidad: str
+    pie: int | None      # 0..7 = A..H; null = sacarlo de la pedalera
+
+
+@app.post("/lineas/{linea}/stomps")
+def asignar_stomp(linea: str, datos: AsignarStomp) -> dict:
+    """Mantener apretado un bloque (o clic derecho) → "Assign to stomp A-H". Si esa letra ya
+    tenía otro bloque, lo reemplaza. Queda en el preset en memoria; 💾 lo guarda a disco,
+    igual que el resto de los cambios del GRID."""
+    ctrl = _linea(linea)
+    en_rack = _cadena_actual(ctrl)
+    if en_rack is not None and datos.unidad not in en_rack:
+        raise HTTPException(404, f"{datos.unidad!r} no está en el GRID")
+    etiqueta = nombres(_plugins(linea)).get(datos.unidad, datos.unidad)
+    try:
+        ctrl.asignar_stomp(datos.unidad, datos.pie, etiqueta)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return _estado_linea(ctrl, linea)
 
 
 class ConfigAfinador(BaseModel):

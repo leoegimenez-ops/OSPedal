@@ -946,3 +946,54 @@ body {
   .canal .perilla svg { width: 40px; height: 40px; }
   .canal .fader { grid-column: 2; grid-row: 2; align-self: stretch; min-height: 0; height: auto; }
 }
+
+/* -- Stomps: letra en el bloque, menú A-H, huecos en GIG ------------------------------------- */
+
+.bloque { -webkit-touch-callout: none; }
+.insignia-pie {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--color, #71717A);
+  color: #000;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  box-shadow: 0 0 0 2px #000;
+}
+.pop-titulo { padding: 10px 12px 6px; font-size: 13px; color: var(--tenue); max-width: 280px; }
+.pop-titulo b { color: var(--texto); font-weight: 600; }
+.popover .pop-letras {
+  display: grid;
+  grid-template-columns: repeat(4, 64px);
+  gap: 6px;
+  padding: 4px 10px 10px;
+}
+.popover .pop-letra {
+  height: 54px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-radius: 10px;
+  border: 1px solid var(--borde);
+  background: var(--sup2);
+}
+.pop-letra b { font-size: 18px; }
+.pop-letra small {
+  max-width: 56px; font-size: 9.5px; color: var(--tenue);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pop-letra.ocupada b { color: #C7C7CC; }
+.pop-letra.actual { border-color: var(--activo); background: #2A2210; }
+.pop-letra.actual b { color: var(--activo); }
+.popover .pop-quitar { color: var(--error); border-top: 1px solid var(--borde); }
+.tile.libre { background: transparent; border: 1.5px dashed #26262B; cursor: default; }
+.tile.libre .tile-letra { color: #2F2F35; }

@@ -70,10 +70,21 @@ class ControladorEscenario:
         return self.setlist.indice_de(self.banco_activo, self.posicion_activa)
 
     def stomp_activo(self, numero: int) -> bool:
-        stomps = self.preset.stomps
-        if not 0 <= numero < len(stomps):
-            raise IndexError(f"El preset no tiene el stomp {numero}")
-        return self._stomps.get(stomps[numero].unidad, stomps[numero].activo)
+        """`numero` es el pie de la pedalera (0..7 = A..H), no la posición en la lista."""
+        stomp = self.preset.stomp_en_pie(numero)
+        if stomp is None:
+            raise IndexError(f"El preset no tiene stomp en el pie {numero}")
+        return self._stomps.get(stomp.unidad, stomp.activo)
+
+    def asignar_stomp(self, unidad: str, pie: int | None, etiqueta: str) -> None:
+        """Mantener apretado un bloque del GRID → "Assign to stomp A-H". Arranca con el estado
+        on/off que tiene ahora el bloque, así asignar no cambia el sonido."""
+        encendido = bool(self.rpc.obtener(f"{unidad}.on_off").get(f"{unidad}.on_off"))
+        self.preset.asignar_stomp(unidad, pie, etiqueta, encendido)
+        if pie is None:
+            self._stomps.pop(unidad, None)
+        else:
+            self._stomps[unidad] = encendido
 
     # -- Carga de preset --------------------------------------------------------------
 
@@ -344,10 +355,9 @@ class ControladorEscenario:
     # -- Stomps y escenas -------------------------------------------------------------
 
     def _toggle_stomp(self, numero: int) -> str:
-        stomps = self.preset.stomps
-        if not 0 <= numero < len(stomps):
+        stomp = self.preset.stomp_en_pie(numero)
+        if stomp is None:
             return f"Sin stomp {numero + 1}"
-        stomp = stomps[numero]
         nuevo = not self.stomp_activo(numero)
         self._stomps[stomp.unidad] = nuevo
         # Un solo parámetro: es el camino más corto posible al motor.

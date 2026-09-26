@@ -27,6 +27,7 @@ MAX_BANCOS = 32
 PRESETS_POR_BANCO = 8
 MAX_PRESETS = MAX_BANCOS * PRESETS_POR_BANCO  # 256
 MAX_ESCENAS = 8  # A-H, una por switch de la pedalera -- mismo tope que schema.json
+PIES_STOMP = 8   # A-H: pies de la pedalera asignables a un stomp
 
 # Valores aceptados como parámetro por el motor (jsonrpc.cpp:1008-1031).
 TIPOS_VALOR = (int, float, bool, str)
@@ -79,6 +80,9 @@ class Stomp:
     etiqueta: str
     unidad: str
     activo: bool = False
+    # Pie de la pedalera (0..7 = A..H) donde está asignado. None en setlists viejas: ahí manda
+    # el orden de la lista (el primero es A), ver `Preset.stomps_por_pie`.
+    pie: int | None = None
 
     @property
     def parametro(self) -> str:
@@ -90,14 +94,22 @@ class Stomp:
         _exigir(isinstance(datos, dict), ruta, "debe ser un objeto")
         activo = datos.get("activo", False)
         _exigir(isinstance(activo, bool), f"{ruta}.activo", "debe ser booleano")
+        pie = datos.get("pie")
+        _exigir(pie is None or (isinstance(pie, int) and not isinstance(pie, bool)
+                                and 0 <= pie < PIES_STOMP),
+                f"{ruta}.pie", f"debe ser un entero de 0 a {PIES_STOMP - 1} (A-H)")
         return cls(
             etiqueta=_texto(datos, "etiqueta", ruta),
             unidad=_texto(datos, "unidad", ruta),
             activo=activo,
+            pie=pie,
         )
 
     def a_dict(self) -> dict[str, Any]:
-        return {"etiqueta": self.etiqueta, "unidad": self.unidad, "activo": self.activo}
+        salida: dict[str, Any] = {"etiqueta": self.etiqueta, "unidad": self.unidad, "activo": self.activo}
+        if self.pie is not None:
+            salida["pie"] = self.pie
+        return salida
 
 
 @dataclass
@@ -163,7 +175,8 @@ class Preset:
         if tempo is not None:
             _exigir(isinstance(tempo, (int, float)) and not isinstance(tempo, bool),
                     f"{ruta}.tempo_bpm", "debe ser un número")
-            _exigir(20 <= tempo <= 300, f"{ruta}.tempo_bpm", "debe estar entre 20 y 300")
+            # 360: el tope real de los delays sincronizables (ControladorEscenario.fijar_tempo).
+            _exigir(20 <= tempo <= 360, f"{ruta}.tempo_bpm", "debe estar entre 20 y 360")
 
         volumen = datos.get("volumen")
         if volumen is not None:
@@ -181,6 +194,11 @@ class Preset:
         _exigir(len(escenas_crudo) <= MAX_ESCENAS, f"{ruta}.escenas",
                 f"máximo {MAX_ESCENAS} escenas (A-H)")
 
+        stomps = [Stomp.desde_dict(s, f"{ruta}.stomps[{i}]") for i, s in enumerate(stomps_crudo)]
+        pies = [pie for pie, _ in Preset._pies(stomps)]
+        _exigir(len(pies) == len(set(pies)), f"{ruta}.stomps",
+                "dos stomps en el mismo pie de la pedalera")
+
         return cls(
             nombre=_texto(datos, "nombre", ruta),
             guitarix_banco=banco,
@@ -188,8 +206,7 @@ class Preset:
             parametros=_parametros(datos, ruta),
             tempo_bpm=tempo,
             volumen=volumen,
-            stomps=[Stomp.desde_dict(s, f"{ruta}.stomps[{i}]")
-                    for i, s in enumerate(stomps_crudo)],
+            stomps=stomps,
             escenas=[Escena.desde_dict(e, f"{ruta}.escenas[{i}]")
                      for i, e in enumerate(escenas_crudo)],
             notas=_texto(datos, "notas", ruta, obligatorio=False),
@@ -215,6 +232,36 @@ class Preset:
         if self.cadena is not None:
             salida["cadena"] = {k: list(v) for k, v in self.cadena.items()}
         return salida
+
+    @staticmethod
+    def _pies(stomps: list[Stomp]) -> list[tuple[int, Stomp]]:
+        """(pie, stomp) de cada stomp: el `pie` explícito, o su posición en la lista si no
+        tiene (setlists anteriores a la asignación desde el GRID)."""
+        return [(s.pie if s.pie is not None else i, s) for i, s in enumerate(stomps)]
+
+    def stomp_en_pie(self, pie: int) -> Stomp | None:
+        for p, s in self._pies(self.stomps):
+            if p == pie:
+                return s
+        return None
+
+    def pies_de_stomps(self) -> dict[str, int]:
+        """unidad -> pie, para dibujar la letra en el bloque del GRID."""
+        return {s.unidad: p for p, s in self._pies(self.stomps)}
+
+    def asignar_stomp(self, unidad: str, pie: int | None, etiqueta: str, activo: bool) -> None:
+        """Pone `unidad` en el pie dado (A-H), sacándola de donde estuviera y desplazando a
+        quien ocupara ese pie. `pie=None` la quita de la pedalera."""
+        if pie is not None and not 0 <= pie < PIES_STOMP:
+            raise ValueError(f"pie fuera de rango: {pie} (0-{PIES_STOMP - 1})")
+        # Fijar el pie efectivo de todos antes de tocar la lista: si no, al sacar uno los
+        # stomps sin `pie` explícito cambiarían de letra.
+        for p, s in self._pies(self.stomps):
+            s.pie = p
+        self.stomps = [s for s in self.stomps if s.unidad != unidad and s.pie != pie]
+        if pie is not None:
+            self.stomps.append(Stomp(etiqueta=etiqueta, unidad=unidad, activo=activo, pie=pie))
+            self.stomps.sort(key=lambda s: s.pie)
 
     def escena(self, nombre: str) -> Escena | None:
         for e in self.escenas:

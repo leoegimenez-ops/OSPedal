@@ -596,6 +596,24 @@ check("global: todas las lineas a 90",
 r = client.post("/lineas/guitarra1/tempo", json={"bpm": 999})
 check("400 fuera de rango", r.status_code == 400)
 
+print("\n27b. Asignar stomp desde el GRID")
+reset()
+client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "ts9sim", "estereo": False})
+r = client.post("/lineas/guitarra1/stomps", json={"unidad": "ts9sim", "pie": 3})
+check("200 y aparece en D con nombre legible",
+      r.status_code == 200 and any(s["pie"] == 3 and s["unidad"] == "ts9sim" and s["etiqueta"] == "Tube Screamer"
+                                   for s in r.json()["stomps"]), f"-> {r.status_code} {r.text[:300]}")
+g = client.get("/lineas/guitarra1/grid").json()
+check("el bloque del GRID trae su letra", {u["id"]: u["pie"] for u in g["filas"][0]["unidades"]}.get("ts9sim") == 3,
+      f"-> {g['filas'][0]['unidades']}")
+r = client.post("/lineas/guitarra1/accion", json={"accion": "toggle_stomp", "parametro": 3})
+check("pisar D conmuta ese bloque", r.status_code == 200 and r.json()["mensaje"].startswith("Tube Screamer"),
+      f"-> {r.text[:200]}")
+r = client.post("/lineas/guitarra1/stomps", json={"unidad": "noexiste", "pie": 1})
+check("404 si el bloque no esta en el GRID", r.status_code == 404)
+r = client.post("/lineas/guitarra1/stomps", json={"unidad": "ts9sim", "pie": 9})
+check("400 con pie fuera de A-H", r.status_code == 400, f"-> {r.status_code}")
+
 print("\n28. Sincronia: un cambio en una pantalla llega a las demas por /sync")
 with client.websocket_connect("/sync") as ws:
     client.post("/lineas/guitarra1/grid/ordenar", headers={"X-Cliente": "tablet"},
