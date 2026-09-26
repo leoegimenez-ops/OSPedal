@@ -326,6 +326,40 @@ class ControladorEscenario:
         self.rpc.fijar(nombre, valor_rpc(valor))
         return valor
 
+    # -- Nombres y presets nuevos (solo desde la pantalla del OS, ver server/api.py) ------------
+
+    def renombrar_escena(self, indice: int, nombre: str) -> None:
+        """Las escenas se buscan por nombre (escena_activa, escenas de la pedalera): no puede
+        haber dos iguales en el mismo preset, y si se renombra la activa, sigue activa."""
+        escenas = self.preset.escenas
+        if not 0 <= indice < len(escenas):
+            raise ValueError(f"El preset no tiene la escena {indice + 1}")
+        if any(e.nombre == nombre for i, e in enumerate(escenas) if i != indice):
+            raise ValueError(f"Ya hay una escena llamada {nombre!r} en este preset")
+        viejo = escenas[indice].nombre
+        escenas[indice].nombre = nombre
+        if self.escena_activa == viejo:
+            self.escena_activa = nombre
+
+    def nuevo_preset(self, banco: int, nombre: str) -> Preset:
+        """"Save current sound here": un preset nuevo con lo que suena ahora (cadena, valores,
+        líneas paralelas y tempo) en el próximo lugar libre del banco, y queda activo."""
+        if not 0 <= banco < len(self.setlist.bancos):
+            raise ValueError(f"No existe el banco {banco + 1}")
+        presets = self.setlist.bancos[banco].presets
+        if len(presets) >= PRESETS_POR_BANCO:
+            raise ValueError(f"El banco {banco + 1} está lleno ({PRESETS_POR_BANCO} presets)")
+        cadena, parametros = self.capturar()
+        nuevo = Preset(nombre=nombre, cadena=cadena, parametros=parametros, tempo_bpm=self.tempo_bpm,
+                       paralelo=self.lineas.exportar() if self.lineas is not None else None)
+        presets.append(nuevo)
+        # Queda activo sin volver a aplicarlo: lo que suena ES ese preset.
+        self.banco_activo = self.banco_visible = banco
+        self.posicion_activa = len(presets) - 1
+        self.escena_activa = None
+        self._stomps = {}
+        return nuevo
+
     def nueva_escena(self) -> str:
         """Crea una escena nueva con el estado actual y la deja activa. Nombre automático
         ("Scene C", ...) -- el nombre se edita desde el sistema, no desde la app remota."""

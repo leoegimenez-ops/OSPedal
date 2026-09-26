@@ -1246,20 +1246,37 @@ function renderPresets() {
   ant.disabled = sig.disabled = e.total_bancos < 2;
   ant.addEventListener("click", () => accion("banco_anterior"));
   sig.addEventListener("click", () => accion("banco_siguiente"));
-  barra.append(ant, nuevo("div", "titulo", `Bank ${e.banco_visible + 1}<small>${esc(e.banco_visible_nombre)}</small>`), sig);
+  const os = esModoOS();
+  const titulo = nuevo(os ? "button" : "div", "titulo" + (os ? " editable" : ""),
+    `Bank ${e.banco_visible + 1}<small>${esc(e.banco_visible_nombre)}</small>${os ? '<i class="lapiz">✎</i>' : ""}`);
+  if (os) {
+    titulo.addEventListener("click", () =>
+      renombrar({ tipo: "banco", banco: e.banco_visible }, `Rename bank ${e.banco_visible + 1}`, e.banco_visible_nombre));
+  }
+  barra.append(ant, titulo, sig);
   pantalla.appendChild(barra);
 
   const tiles = nuevo("div", "tiles");
+  const primerLibre = e.presets_banco_visible.length;
   for (let i = 0; i < 8; i++) {
     const nombre = e.presets_banco_visible[i];
     const codigo = `${e.banco_visible + 1}${LETRAS[i]}`;
     const activo = e.banco_visible === e.banco_activo && i === e.posicion_activa;
-    const t = nuevo("button", "tile-preset" + (activo ? " activo" : "") + (nombre ? "" : " vacio"),
-      `<span class="codigo">${codigo}</span><span class="nombre">${nombre ? esc(nombre) : "—"}</span>`);
-    if (nombre) t.addEventListener("click", () => accion("preset_en_banco", i));
+    const libreOS = os && !nombre && i === primerLibre;
+    const t = nuevo("button", "tile-preset" + (activo ? " activo" : "") + (nombre ? "" : " vacio") + (libreOS ? " guardar-aqui" : ""),
+      `<span class="codigo">${codigo}</span><span class="nombre">${nombre ? esc(nombre) : libreOS ? "+ Save current sound here" : "—"}</span>`);
+    if (nombre) {
+      // En el OS: mantener apretado (o clic derecho) = renombrar; tocar = cargar, como siempre.
+      const fueMantener = os ? alMantener(t, () =>
+        renombrar({ tipo: "preset", banco: e.banco_visible, posicion: i }, `Rename preset ${codigo}`, nombre)) : () => false;
+      t.addEventListener("click", () => { if (!fueMantener()) accion("preset_en_banco", i); });
+    } else if (libreOS) {
+      t.addEventListener("click", () => guardarPresetNuevo(e.banco_visible));
+    }
     tiles.appendChild(t);
   }
   pantalla.appendChild(tiles);
+  if (os) pantalla.appendChild(nuevo("div", "pista-os", "Hold a preset to rename it · tap the bank name to rename the bank"));
   $contenido.appendChild(pantalla);
 }
 
@@ -1341,7 +1358,11 @@ function renderGig() {
         `<div class="tile-icono">${svg(ICONO_ESCENA)}</div><div class="tile-letra">${LETRAS[i]}</div>` +
         `<div class="tile-nombre">${esc(nombre)}</div>`);
       t.style.setProperty("--color", color);
-      t.addEventListener("click", () => accion("escena", i));
+      // En el OS: mantener apretado (o clic derecho) = renombrar la escena.
+      const fueMantener = esModoOS()
+        ? alMantener(t, () => renombrar({ tipo: "escena", indice: i }, `Rename scene ${LETRAS[i]}`, nombre))
+        : () => false;
+      t.addEventListener("click", () => { if (!fueMantener()) accion("escena", i); });
       tiles.appendChild(t);
     });
     if (e.escenas.length < 8) {
@@ -1558,6 +1579,150 @@ function conectarSync() {
     diferir("sync", aplicarSync, 150);
   };
   ws.onclose = () => setTimeout(conectarSync, 2000);
+}
+
+// -- Teclado en pantalla (pantalla táctil del OS: no tiene teclado) -------------------------------
+//
+// pedirTexto() abre una ventana con el texto y un teclado propio (con ñ y acentos). Si hay un
+// teclado físico conectado, también escribe con ese. Devuelve el texto o null si se cancela.
+
+const FILAS_TECLADO = [
+  ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+  ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+  ["a", "s", "d", "f", "g", "h", "j", "k", "l", "ñ"],
+  ["⇧", "z", "x", "c", "v", "b", "n", "m", "⌫"],
+  ["á", "é", "í", "ó", "ú", "-", "'", ".", "&", "/"],
+];
+const MAX_NOMBRE = 32;
+
+function esModoOS() {
+  return document.body.classList.contains("modo-os");
+}
+
+function pedirTexto(titulo, inicial = "", textoOk = "Save") {
+  return new Promise((resolver) => {
+    let texto = inicial;
+    let mayus = !inicial;          // primera letra en mayúscula
+    let resuelto = false;
+    const terminar = (valor) => {
+      if (resuelto) return;
+      resuelto = true;
+      removeEventListener("keydown", alTeclear, true);
+      resolver(valor);
+    };
+    const cuerpo = nuevo("div", "teclado");
+    const campo = nuevo("div", "teclado-campo");
+    cuerpo.appendChild(campo);
+    const pintar = () => {
+      campo.innerHTML = `${esc(texto)}<i class="cursor"></i><small>${texto.length}/${MAX_NOMBRE}</small>`;
+      for (const b of cuerpo.querySelectorAll(".tecla-letra")) {
+        b.textContent = mayus ? b.dataset.t.toUpperCase() : b.dataset.t;
+      }
+      const shift = cuerpo.querySelector(".tecla-shift");
+      if (shift) shift.classList.toggle("activo", mayus);
+      ok.disabled = !texto.trim();
+    };
+    const escribir = (c) => {
+      if (texto.length >= MAX_NOMBRE) return;
+      texto += mayus ? c.toUpperCase() : c;
+      mayus = false;
+      pintar();
+    };
+    const borrar = () => { texto = texto.slice(0, -1); pintar(); };
+    for (const fila of FILAS_TECLADO) {
+      const f = nuevo("div", "teclado-fila");
+      for (const t of fila) {
+        let b;
+        if (t === "⇧") {
+          b = nuevo("button", "tecla tecla-shift", "⇧");
+          b.addEventListener("click", () => { mayus = !mayus; pintar(); });
+        } else if (t === "⌫") {
+          b = nuevo("button", "tecla tecla-ancha", "⌫");
+          b.addEventListener("click", borrar);
+        } else {
+          b = nuevo("button", "tecla" + (/[a-zñáéíóú]/.test(t) ? " tecla-letra" : ""), esc(t));
+          b.dataset.t = t;
+          b.addEventListener("click", () => escribir(t));
+        }
+        b.type = "button";
+        f.appendChild(b);
+      }
+      cuerpo.appendChild(f);
+    }
+    const abajo = nuevo("div", "teclado-fila");
+    const cancelar = nuevo("button", "tecla tecla-accion", "Cancel");
+    const espacio = nuevo("button", "tecla tecla-espacio", "space");
+    const ok = nuevo("button", "tecla tecla-accion tecla-ok", esc(textoOk));
+    cancelar.addEventListener("click", () => { terminar(null); cerrarCapas(); });
+    espacio.addEventListener("click", () => { if (texto && !texto.endsWith(" ")) escribir(" "); });
+    ok.addEventListener("click", () => { terminar(texto.trim()); cerrarCapas(); });
+    abajo.append(cancelar, espacio, ok);
+    cuerpo.appendChild(abajo);
+
+    function alTeclear(ev) {
+      if (ev.key === "Enter") { ev.preventDefault(); if (texto.trim()) ok.click(); return; }
+      if (ev.key === "Escape") { ev.preventDefault(); cancelar.click(); return; }
+      if (ev.key === "Backspace") { ev.preventDefault(); borrar(); return; }
+      if (ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey) {
+        ev.preventDefault();
+        if (texto.length < MAX_NOMBRE) { texto += ev.key; mayus = false; pintar(); }
+      }
+    }
+    addEventListener("keydown", alTeclear, true);
+    abrirModal(titulo, [], cuerpo, () => terminar(null));
+    $modal.classList.add("modal-teclado");
+    pintar();
+  });
+}
+
+/* Mantener apretado (táctil) o clic derecho (mouse) → fn. Devuelve una función que dice si el
+ * último toque fue un "mantener", para que el click normal no se dispare además. */
+function alMantener(el, fn) {
+  let t = null;
+  let mantenido = false;
+  el.addEventListener("pointerdown", (ev) => {
+    if (ev.button > 0) return;
+    mantenido = false;
+    const x = ev.clientX;
+    const y = ev.clientY;
+    clearTimeout(t);
+    t = setTimeout(() => { mantenido = true; if (navigator.vibrate) navigator.vibrate(15); fn(); }, 500);
+    const cancelar = (e) => {
+      if (e.type === "pointermove" && Math.hypot(e.clientX - x, e.clientY - y) < 8) return;
+      clearTimeout(t);
+      removeEventListener("pointermove", cancelar);
+      removeEventListener("pointerup", cancelar);
+    };
+    addEventListener("pointermove", cancelar);
+    addEventListener("pointerup", cancelar);
+  });
+  el.addEventListener("contextmenu", (ev) => { ev.preventDefault(); mantenido = true; fn(); });
+  el.style.webkitTouchCallout = "none";
+  return () => { const m = mantenido; mantenido = false; return m; };
+}
+
+async function renombrar(datos, titulo, actual) {
+  const nombre = await pedirTexto(titulo, actual);
+  if (!nombre || nombre === actual) return;
+  try {
+    estado.linea_estado = await api(`${rutaLinea()}/renombrar`, { ...datos, nombre });
+    render();
+    aviso(`Renamed: ${nombre}`);
+  } catch (e) {
+    aviso(e.message, true);
+  }
+}
+
+async function guardarPresetNuevo(banco) {
+  const nombre = await pedirTexto("New preset · current sound", "", "Save preset");
+  if (!nombre) return;
+  try {
+    estado.linea_estado = await api(`${rutaLinea()}/presets/nuevo`, { banco, nombre });
+    render();
+    aviso(`Saved as new preset: ${nombre}`);
+  } catch (e) {
+    aviso(e.message, true);
+  }
 }
 
 // -- SYSTEM (solo en la pantalla del propio equipo) -------------------------------------------

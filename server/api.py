@@ -323,6 +323,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="PedalSistema", lifespan=lifespan)
 
+from server.sistema import exigir_local                 # noqa: E402
 from server.sistema import router as _router_sistema   # noqa: E402 -- funciones del OS (pantalla local)
 
 app.include_router(_router_sistema)
@@ -878,6 +879,64 @@ def fijar_parametros_linea(linea: str, datos: FijarParametros) -> dict:
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}
+
+
+class Renombrar(BaseModel):
+    tipo: str                 # preset | banco | escena
+    nombre: str
+    banco: int | None = None
+    posicion: int | None = None
+    indice: int | None = None   # escena del preset activo
+
+
+def _nombre_valido(nombre: str) -> str:
+    nombre = " ".join(nombre.split())
+    if not 1 <= len(nombre) <= 32:
+        raise HTTPException(400, "The name must have 1 to 32 characters")
+    return nombre
+
+
+@app.post("/lineas/{linea}/renombrar")
+def renombrar(linea: str, datos: Renombrar, request: Request) -> dict:
+    """Renombrar presets, bancos y escenas: SOLO desde la pantalla del propio equipo (pedido del
+    usuario: "los nombres son editables pero desde el sistema operativo, no desde la app").
+    Se guarda a disco en el momento: un nombre es un cambio deliberado, no una prueba."""
+    exigir_local(request)
+    ctrl = _linea(linea)
+    nombre = _nombre_valido(datos.nombre)
+    try:
+        if datos.tipo == "escena":
+            if datos.indice is None:
+                raise HTTPException(400, "indice (escena) requerido")
+            ctrl.renombrar_escena(datos.indice, nombre)
+        elif datos.tipo == "preset":
+            ctrl.setlist.preset(datos.banco, datos.posicion).nombre = nombre
+        elif datos.tipo == "banco":
+            ctrl.setlist.bancos[datos.banco].nombre = nombre
+        else:
+            raise HTTPException(400, "tipo: preset | banco | escena")
+    except (ValueError, IndexError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+    _guardar_setlist(linea)
+    return _estado_linea(ctrl, linea)
+
+
+class NuevoPreset(BaseModel):
+    banco: int
+    nombre: str
+
+
+@app.post("/lineas/{linea}/presets/nuevo")
+def nuevo_preset(linea: str, datos: NuevoPreset, request: Request) -> dict:
+    """"Save current sound here" en un lugar vacío del banco (pantalla del OS)."""
+    exigir_local(request)
+    ctrl = _linea(linea)
+    try:
+        ctrl.nuevo_preset(datos.banco, _nombre_valido(datos.nombre))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    _guardar_setlist(linea)
+    return _estado_linea(ctrl, linea)
 
 
 class RestaurarParametro(BaseModel):

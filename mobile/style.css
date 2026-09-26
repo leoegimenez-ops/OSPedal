@@ -1139,3 +1139,55 @@ body {
   .sistema-menu { width: auto; flex-direction: row; overflow-x: auto; }
   .sistema-cuerpo { flex-direction: column; }
 }
+
+/* -- Teclado en pantalla y edición de nombres (pantalla del OS) ---------------------------------- */
+
+.modal.modal-teclado { width: min(760px, calc(100vw - 16px)); }
+.teclado { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 7px; }
+.teclado-campo {
+  position: relative;
+  min-height: 52px;
+  padding: 12px 70px 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--activo);
+  background: #0E0E10;
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+.teclado-campo .cursor {
+  display: inline-block; width: 2px; height: 1.1em; margin-left: 2px; vertical-align: -0.15em;
+  background: var(--activo); animation: parpadeo 1s steps(1) infinite;
+}
+@keyframes parpadeo { 50% { opacity: 0; } }
+.teclado-campo small { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--tenue); font-weight: 500; }
+.teclado-fila { display: flex; gap: 6px; justify-content: center; }
+.tecla {
+  flex: 1 1 0;
+  max-width: 64px;
+  height: 50px;
+  border-radius: 9px;
+  border: 1px solid #2E2E33;
+  background: var(--sup2);
+  font-size: 19px;
+  font-weight: 500;
+  touch-action: manipulation;
+}
+.tecla:active { background: #3A3A40; }
+.tecla-ancha { max-width: 96px; flex-grow: 1.5; }
+.tecla-shift.activo { background: var(--activo); color: #000; }
+.tecla-espacio { max-width: none; flex-grow: 5; font-size: 14px; color: var(--tenue); }
+.tecla-accion { max-width: 140px; flex-grow: 2; font-size: 15px; font-weight: 600; }
+.tecla-ok { background: var(--activo); color: #000; border-color: var(--activo); }
+.tecla-ok:disabled { opacity: 0.35; }
+@media (max-height: 520px) { .tecla { height: 36px; font-size: 16px; } .teclado { gap: 5px; padding: 8px 12px 10px; } }
+
+.barra-sub .titulo.editable {
+  border: none; background: transparent; cursor: pointer; display: flex; align-items: baseline;
+  justify-content: center; gap: 6px; font: inherit; font-weight: 600; font-size: 15px;
+}
+.lapiz { font-style: normal; color: var(--tenue); font-size: 13px; }
+.tile-preset.guardar-aqui { border-color: var(--activo); border-style: dashed; color: var(--activo); cursor: pointer; }
+.tile-preset.guardar-aqui .nombre { font-size: 14px; }
+.pista-os { flex-shrink: 0; text-align: center; color: var(--muy-tenue); font-size: 12px; }

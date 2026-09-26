@@ -764,6 +764,35 @@ r = client.get("/sistema/info")
 check("info del equipo", r.status_code == 200 and {"memoria", "audio", "red", "carga"} <= set(r.json()),
       f"-> {r.text[:200]}")
 
+print("\n27e. Nombres y presets nuevos: solo desde la pantalla del OS")
+reset()
+r = client.post("/lineas/guitarra1/renombrar", json={"tipo": "preset", "banco": 0, "posicion": 1, "nombre": "Riff"},
+                headers={"Cf-Connecting-Ip": "181.1.2.3"})
+check("desde el celular/tunel: 403", r.status_code == 403, f"-> {r.status_code}")
+r = client.post("/lineas/guitarra1/renombrar", json={"tipo": "preset", "banco": 0, "posicion": 1, "nombre": "  Riff   Final "})
+check("renombrar preset (espacios normalizados)", r.status_code == 200
+      and r.json()["presets_banco_visible"][1] == "Riff Final", f"-> {r.text[:200]}")
+guardado = json.loads((Path(_DIR_SETLISTS_TEST) / "guitarra1.json").read_text(encoding="utf-8"))
+check("...y queda en disco al instante", guardado["bancos"][0]["presets"][1]["nombre"] == "Riff Final")
+r = client.post("/lineas/guitarra1/renombrar", json={"tipo": "banco", "banco": 0, "nombre": "Show Sabado"})
+check("renombrar banco", r.json()["banco_visible_nombre"] == "Show Sabado", f"-> {r.text[:150]}")
+client.post("/lineas/guitarra1/accion", json={"accion": "escena", "parametro": 1})
+r = client.post("/lineas/guitarra1/renombrar", json={"tipo": "escena", "indice": 1, "nombre": "Solo"})
+check("renombrar la escena activa: sigue activa con el nombre nuevo",
+      r.json()["escenas"][1] == "Solo" and r.json()["escena_activa"] == "Solo", f"-> {r.text[:200]}")
+r = client.post("/lineas/guitarra1/renombrar", json={"tipo": "escena", "indice": 0, "nombre": "Solo"})
+check("dos escenas con el mismo nombre: 400", r.status_code == 400, f"-> {r.status_code}")
+r = client.post("/lineas/guitarra1/renombrar", json={"tipo": "preset", "banco": 0, "posicion": 0, "nombre": "   "})
+check("nombre vacio: 400", r.status_code == 400)
+r = client.post("/lineas/guitarra1/presets/nuevo", json={"banco": 0, "nombre": "Nuevo Tono"})
+e = r.json()
+check("guardar el sonido actual como preset nuevo: queda en el primer lugar libre y activo",
+      r.status_code == 200 and e["presets_banco_visible"][-1] == "Nuevo Tono"
+      and e["preset"] == "Nuevo Tono" and e["posicion_activa"] == len(e["presets_banco_visible"]) - 1,
+      f"-> {r.text[:250]}")
+r = client.post("/lineas/guitarra1/presets/nuevo", json={"banco": 0, "nombre": "X"}, headers={"X-Forwarded-For": "10.0.0.5"})
+check("preset nuevo desde otro dispositivo: 403", r.status_code == 403)
+
 print("\n28. Sincronia: un cambio en una pantalla llega a las demas por /sync")
 with client.websocket_connect("/sync") as ws:
     client.post("/lineas/guitarra1/grid/ordenar", headers={"X-Cliente": "tablet"},
