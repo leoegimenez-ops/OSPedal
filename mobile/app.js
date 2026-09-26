@@ -490,6 +490,15 @@ function renderPanel() {
     acciones.append(quitar);
   }
   info.appendChild(acciones);
+  const esc_ = escenaActiva();
+  if (esc_) {
+    // Como Cortex: con una escena activa, lo que se toque queda propio de esa escena.
+    const aviso_ = nuevo("div", "panel-escena", `Editing scene <b>${LETRAS[esc_.indice]}</b> · ${esc(esc_.nombre)}`);
+    aviso_.style.setProperty("--escena", esc_.color);
+    info.appendChild(aviso_);
+    const onoffParam = estado.parametros.find((p) => p.nombre === `${u.id}.on_off`);
+    if (onoffParam && onoffParam.de_escena) marcarDeEscena(onoff, onoffParam);
+  }
   $panel.appendChild(info);
 
   const perillas = nuevo("div", "panel-perillas");
@@ -498,17 +507,61 @@ function renderPanel() {
     perillas.appendChild(nuevo("div", "vacio", estado.parametros.length ? "No adjustable parameters." : "Loading…"));
   }
   for (const p of controles) {
+    let control = null;
     if (p.tipo === "bool") {
-      perillas.appendChild(crearInterruptor(p, c.color));
+      control = crearInterruptor(p, c.color);
     } else if (p.min !== null && p.max !== null) {
-      perillas.appendChild(crearPerilla({
+      control = crearPerilla({
         valor: Number(p.valor), min: p.min, max: p.max, etiqueta: etiquetaLegible(p.etiqueta), color: c.color,
         formatear: (v) => formatoValor(v, p.min, p.max),
-        onCambio: (v) => { p.valor = v; enviarParametro(p.nombre, v); },
-      }));
+        onCambio: (v) => {
+          p.valor = v;
+          enviarParametro(p.nombre, v);
+          if (escenaActiva() && !p.de_escena) { p.de_escena = true; marcarDeEscena(control, p); }
+        },
+      });
     }
+    if (!control) continue;
+    if (p.de_escena) marcarDeEscena(control, p);
+    perillas.appendChild(control);
   }
   $panel.appendChild(perillas);
+}
+
+function escenaActiva() {
+  const e = estado.linea_estado;
+  if (!e || !e.escena_activa) return null;
+  const indice = e.escenas.indexOf(e.escena_activa);
+  if (indice < 0) return null;
+  return { nombre: e.escena_activa, indice, color: COLORES_ESCENA[indice % COLORES_ESCENA.length] };
+}
+
+/* Perilla con valor propio de la escena: toma el color de la escena y ofrece ↺ (volver al
+ * valor del preset). */
+function marcarDeEscena(el, p) {
+  const e = escenaActiva();
+  if (!e || el.classList.contains("de-escena")) return;
+  el.classList.add("de-escena");
+  el.style.setProperty("--escena", e.color);
+  if (el.tagName === "BUTTON") return;   // la píldora ON/BYPASS: solo color (no se anidan botones)
+  el.style.setProperty("--color", e.color);   // crearPerilla lo fija inline: hay que pisarlo igual
+  const volver = nuevo("button", "volver-preset", "↺");
+  volver.title = "Reset to preset value";
+  volver.setAttribute("aria-label", "Reset to preset value");
+  volver.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  volver.addEventListener("click", async (ev) => {
+    ev.stopPropagation();
+    try {
+      await api(`${rutaLinea()}/escena/restaurar`, { nombre: p.nombre });
+      await cargarParametros();
+      await recargarGrid();
+      render();
+      aviso("Back to preset value");
+    } catch (e2) {
+      aviso(e2.message, true);
+    }
+  });
+  el.appendChild(volver);
 }
 
 /* Cuando el motor no trae nombre legible, la etiqueta es el id crudo ("gain1", "wet_dry"). */

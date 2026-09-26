@@ -997,3 +997,34 @@ body {
 .popover .pop-quitar { color: var(--error); border-top: 1px solid var(--borde); }
 .tile.libre { background: transparent; border: 1.5px dashed #26262B; cursor: default; }
 .tile.libre .tile-letra { color: #2F2F35; }
+
+/* -- Escenas (Cortex): perillas con valor propio de la escena ---------------------------------- */
+
+.panel-escena {
+  font-size: 11.5px;
+  color: var(--tenue);
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--escena) 55%, transparent);
+  background: color-mix(in srgb, var(--escena) 12%, transparent);
+}
+.panel-escena b { color: var(--escena); }
+.perilla.de-escena, .interruptor.de-escena { position: relative; --color: var(--escena); }
+.perilla.de-escena .perilla-etiqueta, .interruptor.de-escena .perilla-etiqueta { color: var(--escena); }
+.perilla.de-escena .perilla-valor { color: var(--escena); }
+.pildora.de-escena { box-shadow: 0 0 0 2px var(--escena); }
+.volver-preset {
+  position: absolute;
+  top: -4px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--escena);
+  background: #0E0E10;
+  color: var(--escena);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}

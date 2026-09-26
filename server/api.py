@@ -673,15 +673,28 @@ def obtener_parametros_linea(linea: str, nombres: str) -> Any:
 
 @app.post("/lineas/{linea}/parametros")
 def fijar_parametros_linea(linea: str, datos: FijarParametros) -> dict:
+    """Perillas y on/off. Pasa por el controlador: con una escena activa, el valor queda
+    propio de esa escena (comportamiento Cortex, ver ControladorEscenario.fijar_parametros)."""
     ctrl = _linea(linea)
-    pares: list[Any] = []
-    for nombre, valor in datos.pares.items():
-        pares.extend((nombre, valor))
     try:
-        ctrl.rpc.fijar(*pares)
+        ctrl.fijar_parametros(datos.pares)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True}
+
+
+class RestaurarParametro(BaseModel):
+    nombre: str
+
+
+@app.post("/lineas/{linea}/escena/restaurar")
+def restaurar_parametro(linea: str, datos: RestaurarParametro) -> dict:
+    """"Volver al valor del preset" de una perilla marcada como propia de la escena."""
+    try:
+        valor = _linea(linea).restaurar_de_preset(datos.nombre)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"nombre": datos.nombre, "valor": valor}
 
 
 _TIPOS_RENDERIZABLES = frozenset({"float", "bool"})
@@ -721,10 +734,15 @@ def cadena_linea(linea: str) -> list[str]:
 def unidad_linea(linea: str, unidad: str) -> dict:
     """Parámetros controlables de una unidad del rack (`queryunit`, reordenado) -- arma los
     knobs cuando se toca un bloque en el editor de nodos."""
-    crudo = _linea(linea).rpc.consultar_unidad(unidad)
+    ctrl = _linea(linea)
+    crudo = ctrl.rpc.consultar_unidad(unidad)
     if not crudo:
         raise HTTPException(404, f"unidad desconocida o sin parámetros: {unidad!r}")
-    return {"unidad": unidad, "parametros": _parametros_unidad(crudo)}
+    propios = ctrl.propios_de_escena()
+    parametros = _parametros_unidad(crudo)
+    for p in parametros:
+        p["de_escena"] = p["nombre"] in propios
+    return {"unidad": unidad, "escena": ctrl.escena_activa, "parametros": parametros}
 
 
 def _proximo_evento(gx: GuitarixRPC) -> dict | None:

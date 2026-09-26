@@ -346,5 +346,43 @@ try:
 except ValueError as e:
     check("rechaza dos stomps en el mismo pie", "mismo pie" in str(e), f"-> {e}")
 
+print("\n15. Escenas como Cortex: la perilla movida en una escena es propia de esa escena")
+m5 = MotorFalso()
+m5.rack[0] = ["ampstack", "ts9sim"]
+p5 = Preset("Uno", parametros={"ts9sim.drive": 0.5, "ts9sim.on_off": True},
+            escenas=[Escena("Verso", {"ts9sim.drive": 0.5}), Escena("Coro", {})])
+c5 = ControladorEscenario(Setlist(nombre="T", bancos=[Banco("A", [p5])]), m5)
+c5.ejecutar(Accion.ESCENA, 1)                                   # Coro
+c5.fijar_parametros({"ts9sim.drive": 0.9})
+check("el valor queda en la escena Coro", p5.escena("Coro").parametros.get("ts9sim.drive") == 0.9)
+check("Verso no cambia", p5.escena("Verso").parametros["ts9sim.drive"] == 0.5)
+check("el preset base no cambia", p5.parametros["ts9sim.drive"] == 0.5)
+check("se marca como propio de la escena", c5.propios_de_escena() == {"ts9sim.drive"},
+      f"-> {c5.propios_de_escena()}")
+c5.ejecutar(Accion.ESCENA, 0)
+check("ir a Verso suena 0.5", m5.valores["ts9sim.drive"] == 0.5)
+check("en Verso no hay nada marcado", c5.propios_de_escena() == set(), f"-> {c5.propios_de_escena()}")
+c5.ejecutar(Accion.ESCENA, 1)
+check("volver a Coro suena 0.9", m5.valores["ts9sim.drive"] == 0.9)
+c5.fijar_parametros({"ts9sim.on_off": 0})
+check("apagar un bloque en la escena tambien es propio de la escena",
+      p5.escena("Coro").parametros.get("ts9sim.on_off") == 0 and "ts9sim.on_off" in c5.propios_de_escena())
+c5.guardar_en_preset()
+check("💾 dentro de la escena: la base conserva sus valores",
+      p5.parametros["ts9sim.drive"] == 0.5 and p5.parametros["ts9sim.on_off"] is True, f"-> {p5.parametros}")
+check("...y la escena conserva los suyos", p5.escena("Coro").parametros.get("ts9sim.drive") == 0.9)
+valor = c5.restaurar_de_preset("ts9sim.drive")
+check("volver al valor del preset: suena 0.5 y deja de estar marcado",
+      valor == 0.5 and m5.valores["ts9sim.drive"] == 0.5 and "ts9sim.drive" not in c5.propios_de_escena())
+try:
+    c5.restaurar_de_preset("ts9sim.inexistente")
+    check("restaurar algo que el preset no tiene -> error claro", False)
+except ValueError as e:
+    check("restaurar algo que el preset no tiene -> error claro", "💾" in str(e), f"-> {e}")
+c5.ejecutar(Accion.CAMBIAR_PRESET, 0)                           # recargar: sin escena
+c5.fijar_parametros({"ts9sim.drive": 0.7})
+check("sin escena activa, mover perillas no toca ninguna escena",
+      p5.escena("Verso").parametros["ts9sim.drive"] == 0.5 and "ts9sim.drive" not in p5.escena("Coro").parametros)
+
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

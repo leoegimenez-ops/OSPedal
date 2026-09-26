@@ -21,6 +21,14 @@ from presets.preset_manager import (
 )
 
 
+def _mismo_valor(a: Any, b: Any) -> bool:
+    if isinstance(a, bool) or isinstance(b, bool):
+        return bool(a) == bool(b)
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(float(a) - float(b)) <= 1e-4 * max(1.0, abs(float(b)))
+    return a == b
+
+
 class Modo(str, Enum):
     PRESET = "preset"
     STOMP = "stomp"
@@ -242,12 +250,61 @@ class ControladorEscenario:
         stomps pisados pasan a ser el estado guardado: lo que suena es lo que queda."""
         preset = self.preset
         cadena, parametros = self.capturar()
+        escena = self._escena_actual()
+        if escena is not None:
+            # Guardando DENTRO de una escena: lo que es propio de la escena queda en la escena
+            # y la base del preset conserva su valor -- si no, 💾 en la escena B pisaba el
+            # preset con los valores de B y las demás escenas los heredaban.
+            for nombre in escena.parametros:
+                if nombre in parametros:
+                    escena.parametros[nombre] = parametros[nombre]
+                if nombre in preset.parametros:
+                    parametros[nombre] = preset.parametros[nombre]
         preset.cadena = cadena
         preset.parametros = parametros
         for stomp in preset.stomps:
             stomp.activo = bool(parametros.get(stomp.parametro, stomp.activo))
         self._stomps = {s.unidad: s.activo for s in preset.stomps}
         return preset
+
+    # -- Escenas como Cortex -------------------------------------------------------------
+    #
+    # Estando en una escena, mover una perilla (o prender/apagar un bloque) la vuelve propia de
+    # ESA escena: se guarda en `escena.parametros` y las demás escenas no cambian. En la app la
+    # perilla se marca con el color de la escena y se puede "volver al valor del preset".
+
+    def _escena_actual(self) -> Escena | None:
+        return self.preset.escena(self.escena_activa) if self.escena_activa else None
+
+    def fijar_parametros(self, pares: dict[str, Any]) -> None:
+        planos: list[Any] = []
+        for nombre, valor in pares.items():
+            planos += [nombre, valor]
+        if planos:
+            self.rpc.fijar(*planos)
+        escena = self._escena_actual()
+        if escena is not None:
+            escena.parametros.update(pares)
+
+    def propios_de_escena(self) -> set[str]:
+        """Parámetros cuyo valor en la escena activa difiere del preset: los que la app marca."""
+        escena = self._escena_actual()
+        if escena is None:
+            return set()
+        base = self.preset.parametros
+        return {n for n, v in escena.parametros.items() if n not in base or not _mismo_valor(v, base[n])}
+
+    def restaurar_de_preset(self, nombre: str) -> Any:
+        """"Volver al valor del preset": la perilla deja de ser propia de la escena."""
+        escena = self._escena_actual()
+        if escena is None:
+            raise ValueError("No hay una escena activa")
+        if nombre not in self.preset.parametros:
+            raise ValueError("El preset no tiene guardado ese parámetro: guardalo con 💾 primero")
+        valor = self.preset.parametros[nombre]
+        escena.parametros.pop(nombre, None)
+        self.rpc.fijar(nombre, valor_rpc(valor))
+        return valor
 
     def nueva_escena(self) -> str:
         """Crea una escena nueva con el estado actual y la deja activa. Nombre automático
