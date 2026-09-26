@@ -596,5 +596,27 @@ check("global: todas las lineas a 90",
 r = client.post("/lineas/guitarra1/tempo", json={"bpm": 999})
 check("400 fuera de rango", r.status_code == 400)
 
+print("\n28. Sincronia: un cambio en una pantalla llega a las demas por /sync")
+with client.websocket_connect("/sync") as ws:
+    client.post("/lineas/guitarra1/grid/ordenar", headers={"X-Cliente": "tablet"},
+                json={"estereo": False, "orden": api._linea("guitarra1").rpc.orden_rack(0)})
+    m = ws.receive_json()
+    check("grid: tipo, linea y quien lo hizo",
+          m == {"tipo": "grid", "linea": "guitarra1", "origen": "tablet"}, f"-> {m}")
+    client.post("/lineas/bajo/accion", headers={"X-Cliente": "os"}, json={"accion": "preset_siguiente"})
+    m = ws.receive_json()
+    check("cambio de preset en otra linea", m["tipo"] == "linea" and m["linea"] == "bajo", f"-> {m}")
+    client.post("/lineas/guitarra1/tempo", json={"bpm": 100, "alcance": "global"})
+    m = ws.receive_json()
+    check("tempo avisa a todas las lineas ('*')", m["linea"] == "*", f"-> {m}")
+    client.post("/mezclador/ganancia", json={"fuente": "voz", "bus": "pa", "valor": 0.5})
+    m = ws.receive_json()
+    check("mezcla", m["tipo"] == "mezcla", f"-> {m}")
+    client.post("/lineas/guitarra1/afinador", json={"activo": False})
+    client.post("/lineas/guitarra1/grid/ordenar", json={"estereo": False, "orden": ["x"]})  # 400
+    client.post("/lineas/guitarra1/parametros", json={"pares": {"ts9sim.drive": 0.3}})
+    m = ws.receive_json()
+    check("el afinador y los errores NO avisan; lo siguiente si", m["tipo"] == "parametros", f"-> {m}")
+
 print("\n" + ("FALLARON: " + ", ".join(fallos) if fallos else "TODO OK"))
 sys.exit(1 if fallos else 0)

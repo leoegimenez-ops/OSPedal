@@ -68,10 +68,14 @@ const estado = {
 
 // -- Utilidades ----------------------------------------------------------------------------
 
+// Identifica a esta pantalla ante el servidor: los avisos de /sync que ella misma provocó se
+// ignoran (ya los tiene aplicados).
+const ID_CLIENTE = Math.random().toString(36).slice(2, 10);
+
 async function api(ruta, cuerpo) {
-  const opciones = cuerpo === undefined ? {} : {
+  const opciones = cuerpo === undefined ? { headers: { "X-Cliente": ID_CLIENTE } } : {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Cliente": ID_CLIENTE },
     body: JSON.stringify(cuerpo),
   };
   const resp = await fetch(ruta, opciones);
@@ -1229,6 +1233,60 @@ async function actualizarMotor() {
   }
 }
 
+// -- Sincronía al instante con las demás pantallas (OS, tablet, celular) ----------------------
+
+let dedoAbajo = false;
+let syncPendiente = false;
+document.addEventListener("pointerdown", () => { dedoAbajo = true; }, true);
+const soltarDedo = () => {
+  dedoAbajo = false;
+  if (syncPendiente) { syncPendiente = false; diferir("sync", aplicarSync, 250); }
+};
+document.addEventListener("pointerup", soltarDedo, true);
+document.addEventListener("pointercancel", soltarDedo, true);
+
+const cambiosSync = { linea: false, parametros: false, mezcla: false };
+
+async function aplicarSync() {
+  // Si el usuario está en medio de un gesto (perilla, fader, arrastre), esperar a que suelte:
+  // re-dibujar bajo el dedo le arrancaría el control.
+  if (dedoAbajo) { syncPendiente = true; return; }
+  const c = { ...cambiosSync };
+  cambiosSync.linea = cambiosSync.parametros = cambiosSync.mezcla = false;
+  try {
+    if (c.mezcla) {
+      estado.matriz = await api("/mezclador/matriz");
+    }
+    if (c.linea) {
+      await cargarLinea();
+      if (estado.seleccion) await cargarParametros();
+    } else if (c.parametros && estado.seleccion) {
+      await cargarParametros();
+    }
+    render();
+  } catch (e) {
+    /* el motor puede estar reiniciando: el próximo aviso o el reintento lo levantan */
+  }
+}
+
+function conectarSync() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/sync`);
+  ws.onmessage = (ev) => {
+    let m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.origen === ID_CLIENTE) return;
+    if (m.tipo === "mezcla") cambiosSync.mezcla = true;
+    else if (m.linea === "*" || m.linea === estado.linea) {
+      if (m.tipo === "parametros") cambiosSync.parametros = true;
+      else cambiosSync.linea = true;
+    } else {
+      return;
+    }
+    diferir("sync", aplicarSync, 150);
+  };
+  ws.onclose = () => setTimeout(conectarSync, 2000);
+}
+
 async function iniciar() {
   try {
     estado.lineas = await api("/lineas");
@@ -1240,6 +1298,7 @@ async function iniciar() {
   await cambiarLinea(estado.linea);
   actualizarMotor();
   setInterval(actualizarMotor, 5000);
+  conectarSync();
 }
 
 iniciar();

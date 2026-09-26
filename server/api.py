@@ -708,6 +708,92 @@ def _proximo_evento(gx: GuitarixRPC) -> dict | None:
     return None
 
 
+# -- Sincronía entre dispositivos (OS, tablet, celular) --------------------------------------
+#
+# Cualquier POST que cambie algo (preset, escena, grid, perillas, mezcla, tempo) se anuncia a
+# todas las pantallas conectadas a /sync, que recargan lo que corresponda. Se hace en un
+# middleware y no endpoint por endpoint: así ningún cambio nuevo se olvida de avisar. El mensaje
+# lleva el `X-Cliente` de quien lo hizo para que esa pantalla no se recargue a sí misma.
+
+class _Sincronizador:
+    def __init__(self) -> None:
+        self._colas: set[asyncio.Queue] = set()
+
+    def suscribir(self) -> asyncio.Queue:
+        cola: asyncio.Queue = asyncio.Queue(maxsize=200)
+        self._colas.add(cola)
+        return cola
+
+    def desuscribir(self, cola: asyncio.Queue) -> None:
+        self._colas.discard(cola)
+
+    def publicar(self, mensaje: dict) -> None:
+        for cola in list(self._colas):
+            try:
+                cola.put_nowait(mensaje)
+            except asyncio.QueueFull:
+                # Pantalla colgada que no lee: se la suelta en vez de acumular memoria.
+                self._colas.discard(cola)
+
+
+_sync = _Sincronizador()
+
+
+def _mensaje_sync(ruta: str) -> dict | None:
+    partes = [p for p in ruta.split("/") if p]
+    if partes[:1] == ["mezclador"]:
+        return {"tipo": "mezcla", "linea": None}
+    if len(partes) >= 3 and partes[0] == "lineas":
+        linea, accion = partes[1], partes[2]
+        if accion == "afinador":
+            return None                      # el afinador es de una sola pantalla
+        if accion == "parametros":
+            return {"tipo": "parametros", "linea": linea}
+        if accion == "grid":
+            return {"tipo": "grid", "linea": linea}
+        return {"tipo": "linea", "linea": linea}   # accion, guardar, escenas, tempo...
+    return None
+
+
+@app.middleware("http")
+async def _avisar_cambios(request: Request, call_next):
+    respuesta = await call_next(request)
+    if request.method == "POST" and respuesta.status_code < 400:
+        mensaje = _mensaje_sync(request.url.path)
+        if mensaje:
+            if mensaje["tipo"] == "linea" and request.url.path.endswith("/tempo"):
+                mensaje["linea"] = "*"       # el tempo "global" toca todas las líneas
+            mensaje["origen"] = request.headers.get("x-cliente")
+            _sync.publicar(mensaje)
+    return respuesta
+
+
+@app.websocket("/sync")
+async def sincronia(ws: WebSocket) -> None:
+    await ws.accept()
+    cola = _sync.suscribir()
+    tarea_recibir = asyncio.ensure_future(ws.receive())
+    tarea_mensaje = asyncio.ensure_future(cola.get())
+    try:
+        while True:
+            listas, _ = await asyncio.wait(
+                {tarea_recibir, tarea_mensaje}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if tarea_recibir in listas:
+                if tarea_recibir.result().get("type") == "websocket.disconnect":
+                    break
+                tarea_recibir = asyncio.ensure_future(ws.receive())
+            if tarea_mensaje in listas:
+                await ws.send_json(tarea_mensaje.result())
+                tarea_mensaje = asyncio.ensure_future(cola.get())
+    except WebSocketDisconnect:
+        pass
+    finally:
+        tarea_recibir.cancel()
+        tarea_mensaje.cancel()
+        _sync.desuscribir(cola)
+
+
 @app.websocket("/eventos")
 async def eventos(ws: WebSocket) -> None:
     """Suscribe a todos los eventos del motor y los reenvía como JSON por el socket.
