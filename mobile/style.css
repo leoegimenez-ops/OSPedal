@@ -1028,3 +1028,63 @@ body {
   padding: 0;
   cursor: pointer;
 }
+
+/* -- Líneas paralelas (como Cortex): SPLIT/MERGE, punto ● y línea B -------------------------------- */
+
+.nodo-ruteo {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: calc(var(--bloque) * 0.62);
+  height: calc(var(--bloque) * 0.62);
+  border-radius: 50%;
+  border: 2px solid #A1A1AA;
+  background: #0B0B0C;
+  color: #F4F4F5;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  touch-action: none;
+  cursor: grab;
+  -webkit-touch-callout: none;
+}
+.nodo-ruteo svg { width: 58%; height: 58%; }
+.nodo-ruteo.seleccionado { border-color: #FFFFFF; box-shadow: 0 0 0 3px rgba(255,255,255,0.14); }
+.nodo-ruteo.hueco-arrastre { opacity: 0.2; }
+.separador-a, .separador-b { flex-shrink: 0; height: 1px; }
+/* En la fila paralela no hay hueco extra antes del primer bloque de B (lo da el separador). */
+.fila-paralela { min-height: var(--bloque); }
+
+.punto-split {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-left: calc(var(--bloque) * 0.95 - 9px);   /* debajo del borde derecho del "In" */
+  border-radius: 50%;
+  border: none;
+  background: #D4D4D8;
+  box-shadow: 0 0 0 6px rgba(212,212,216,0.12);
+  padding: 0;
+  touch-action: none;
+  cursor: grab;
+}
+.pista-split { color: var(--muy-tenue); font-size: 12px; white-space: nowrap; margin-left: 64px; }
+.fantasma-punto {
+  position: fixed;
+  z-index: 40;
+  margin: 0;
+  pointer-events: none;
+  box-shadow: 0 0 0 8px rgba(255,197,61,0.25);
+  background: var(--activo);
+}
+.marca-insercion {
+  flex-shrink: 0;
+  width: 4px;
+  height: calc(var(--bloque) * 0.8);
+  border-radius: 2px;
+  background: var(--activo);
+  box-shadow: 0 0 12px rgba(255,197,61,0.6);
+}
+.grid-lineas line.tenue { stroke: #3F3F46; stroke-dasharray: 3 5; }

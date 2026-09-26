@@ -126,18 +126,21 @@ async function recargarGrid() {
 
 async function cargarParametros() {
   const s = estado.seleccion;
-  const r = await api(`${rutaLinea()}/unidad/${encodeURIComponent(s.id)}`);
+  // Ids calificados por línea ("a/ts9sim"): la barra es parte de la ruta, no se codifica.
+  const ruta = s.id.split("/").map(encodeURIComponent).join("/");
+  const r = await api(`${rutaLinea()}/unidad/${ruta}`);
   estado.parametros = r.parametros;
+}
+
+function itemsGrid() {
+  const g = estado.grid;
+  return g ? [...(g.principal || []), ...(g.paralela || [])] : [];
 }
 
 function unidadSeleccionada() {
   const s = estado.seleccion;
-  if (!s || !estado.grid) return null;
-  for (const fila of estado.grid.filas) {
-    const u = fila.unidades.find((x) => x.id === s.id);
-    if (u) return { ...u, estereo: fila.estereo };
-  }
-  return null;
+  if (!s) return null;
+  return itemsGrid().find((x) => x.id === s.id) || null;
 }
 
 /* `textoAviso(estadoNuevo)` arma el aviso en inglés -- los mensajes del controlador vienen en
@@ -234,6 +237,16 @@ function mostrarErrorLinea(mensaje) {
 }
 
 // -- GRID ----------------------------------------------------------------------------------
+//
+// Como Cortex: una fila por línea.
+//   fila principal: In → [bloques] ◆SPLIT [línea A] ◆MERGE [después] + → Out
+//   fila paralela:  sin paralelo, un punto ● para arrastrar a la fila de arriba (crea el SPLIT);
+//                   con paralelo, la línea B cuelga del SPLIT y vuelve en el MERGE.
+// Por dentro cada tramo es un motor aparte (engine/disposicion.py); la app solo manda la
+// disposición nueva (/grid/disponer) y el servidor mueve los bloques entre motores.
+
+const ICONO_SPLIT = '<path d="M3 12h6"/><path d="M9 12c3 0 4-5 7-5h5M9 12c3 0 4 5 7 5h5"/>';
+const ICONO_MERGE = '<path d="M3 7h5c3 0 4 5 7 5M3 17h5c3 0 4-5 7-5"/><path d="M15 12h6"/>';
 
 function renderGrid() {
   $contenido.innerHTML = "";
@@ -248,104 +261,216 @@ function renderGrid() {
   lineas.classList.add("grid-lineas");
   lienzo.appendChild(lineas);
 
-  g.filas.forEach((fila, idx) => {
-    const f = nuevo("div", "fila");
+  // Fila principal
+  const f1 = nuevo("div", "fila fila-principal");
+  const inBtn = nuevo("button", "extremo in", `In<small>${esc(etiquetaLinea(estado.linea))}</small>`);
+  inBtn.type = "button";
+  inBtn.addEventListener("click", () => menuInstrumento(inBtn));
+  f1.appendChild(inBtn);
+  for (const it of g.principal || []) f1.appendChild(crearItemGrid(it));
+  if (g.split) {
+    // Espaciador antes del MERGE para que la línea B (abajo) nunca pase más allá del MERGE.
+    const merge = f1.querySelector('[data-id="@merge"]');
+    f1.insertBefore(nuevo("div", "separador-a"), merge);
+  }
+  const mas1 = nuevo("button", "bloque mas", svg(ICONO_MAS));
+  mas1.type = "button";
+  mas1.title = g.split ? "Add block after the merge" : "Add block";
+  mas1.addEventListener("click", () => abrirSelector(g.split ? "post" : "pre"));
+  f1.appendChild(mas1);
+  f1.appendChild(nuevo("div", "fila-relleno"));
+  f1.appendChild(nuevo("div", "extremo solo-texto", "Out<small>1/2</small>"));
+  lienzo.appendChild(f1);
 
-    if (idx === 0) {
-      const inBtn = nuevo("button", "extremo in", `In<small>${esc(etiquetaLinea(estado.linea))}</small>`);
-      inBtn.type = "button";
-      inBtn.addEventListener("click", () => menuInstrumento(inBtn));
-      f.appendChild(inBtn);
-    } else {
-      f.appendChild(nuevo("div", "extremo solo-texto", "Prev.<br>Row"));
-    }
-
-    for (const u of fila.unidades) {
-      const sel = estado.seleccion && estado.seleccion.id === u.id;
-      const b = nuevo("button", "bloque" + (u.encendido ? "" : " apagado") + (sel ? " seleccionado" : ""),
-        svg(cat(u.categoria).icono));
-      b.type = "button";
-      b.title = u.nombre;
-      b.dataset.id = u.id;
-      b.style.setProperty("--color", cat(u.categoria).color);
-      if (u.pie !== null && u.pie !== undefined) {
-        b.appendChild(nuevo("span", "insignia-pie", LETRAS[u.pie]));
-      }
-      habilitarArrastre(b, f, fila.estereo, () => seleccionarBloque(u.id, fila.estereo),
-        () => menuStomp(b, u));
-      b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); menuStomp(b, u); });
-      f.appendChild(b);
-    }
-
-    const mas = nuevo("button", "bloque mas", svg(ICONO_MAS));
-    mas.type = "button";
-    mas.title = fila.estereo ? "Add block (stereo row)" : "Add block (mono row)";
-    mas.addEventListener("click", () => abrirSelector(fila.estereo));
-    f.appendChild(mas);
-
-    f.appendChild(nuevo("div", "fila-relleno"));
-    f.appendChild(idx === 0
-      ? nuevo("div", "extremo solo-texto", "Row<small>2</small>")
-      : nuevo("div", "extremo solo-texto", "Out<small>1/2</small>"));
-    lienzo.appendChild(f);
-  });
+  // Fila paralela
+  const f2 = nuevo("div", "fila fila-paralela");
+  if (g.split) {
+    f2.appendChild(nuevo("div", "separador-b"));
+    for (const it of g.paralela || []) f2.appendChild(crearItemGrid(it));
+    const mas2 = nuevo("button", "bloque mas", svg(ICONO_MAS));
+    mas2.type = "button";
+    mas2.title = "Add block to line B";
+    mas2.addEventListener("click", () => abrirSelector("b"));
+    f2.appendChild(mas2);
+  } else {
+    const punto = nuevo("button", "punto-split", "");
+    punto.type = "button";
+    punto.title = "Drag onto the row above to create a parallel line";
+    habilitarPuntoSplit(punto, f1);
+    f2.append(punto, nuevo("div", "pista-split", "Drag ● onto the row above to split the signal"));
+  }
+  lienzo.appendChild(f2);
 
   scroll.appendChild(lienzo);
   $contenido.appendChild(scroll);
-  requestAnimationFrame(() => dibujarLineas(lienzo, lineas));
+  requestAnimationFrame(() => {
+    if (g.split) alinearParalela(f1, f2);
+    dibujarLineas(lienzo, lineas, f1, f2, g.split);
+  });
 }
 
-/* Las líneas de conexión se miden de los elementos reales: la fila 1 va del "In" al "Row 2",
- * vuelve por abajo y entra a la fila 2 después del "Prev. Row" -- el recorrido real de la señal
- * (cadena mono -> cadena estéreo). Los bloques tapan la línea con su fondo negro. */
-function dibujarLineas(lienzo, lineasSvg) {
+function crearItemGrid(it) {
+  const sel = estado.seleccion && estado.seleccion.id === it.id;
+  if (it.tipo === "split" || it.tipo === "merge") {
+    const n = nuevo("button", "nodo-ruteo" + (sel ? " seleccionado" : ""),
+      svg(it.tipo === "split" ? ICONO_SPLIT : ICONO_MERGE));
+    n.type = "button";
+    n.title = it.tipo === "split" ? "Split (tap: A/B balance)" : "Merge (tap: level, pan, phase)";
+    n.dataset.id = it.id;
+    const menu = () => abrirPopover(n, [{ texto: "Remove parallel line", accion: quitarLinea }]);
+    habilitarArrastre(n, () => seleccionarBloque(it.id), menu, { soloPrincipal: true });
+    n.addEventListener("contextmenu", (ev) => { ev.preventDefault(); menu(); });
+    return n;
+  }
+  const b = nuevo("button", "bloque" + (it.encendido ? "" : " apagado") + (sel ? " seleccionado" : ""),
+    svg(cat(it.categoria).icono));
+  b.type = "button";
+  b.title = it.nombre;
+  b.dataset.id = it.id;
+  b.style.setProperty("--color", cat(it.categoria).color);
+  if (it.pie !== null && it.pie !== undefined) b.appendChild(nuevo("span", "insignia-pie", LETRAS[it.pie]));
+  habilitarArrastre(b, () => seleccionarBloque(it.id), () => menuStomp(b, it), {});
+  b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); menuStomp(b, it); });
+  return b;
+}
+
+/* La línea B arranca justo debajo del SPLIT, y el tramo A se estira (espaciador) hasta que el
+ * MERGE quede a la derecha del final de B: así las líneas nunca se cruzan. */
+function alinearParalela(f1, f2) {
+  const split = f1.querySelector('[data-id="@split"]');
+  const merge = f1.querySelector('[data-id="@merge"]');
+  const sepB = f2.querySelector(".separador-b");
+  const sepA = f1.querySelector(".separador-a");
+  if (!split || !merge || !sepB || !sepA) return;
+  const hueco = parseFloat(getComputedStyle(f2).columnGap || getComputedStyle(f2).gap) || 0;
+  const r2 = f2.getBoundingClientRect();
+  const rs = split.getBoundingClientRect();
+  sepB.style.width = `${Math.max(0, rs.right - r2.left - hueco)}px`;
+  const finB = f2.querySelector(".bloque.mas").getBoundingClientRect().right;
+  const rm = merge.getBoundingClientRect();
+  sepA.style.width = `${Math.max(0, finB + hueco - rm.left)}px`;
+}
+
+/* Líneas de conexión, medidas de los elementos reales. Los bloques tapan la línea con su fondo. */
+function dibujarLineas(lienzo, svgEl, f1, f2, conSplit) {
   const base = lienzo.getBoundingClientRect();
   const w = lienzo.scrollWidth;
   const h = lienzo.scrollHeight;
-  lineasSvg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-  lineasSvg.setAttribute("width", w);
-  lineasSvg.setAttribute("height", h);
-  const filas = lienzo.querySelectorAll(".fila");
-  const geo = [];
-  filas.forEach((f) => {
-    const ex = f.querySelectorAll(".extremo");
-    const izq = ex[0].getBoundingClientRect();
-    const der = ex[ex.length - 1].getBoundingClientRect();
-    const y = izq.top + izq.height / 2 - base.top;
-    geo.push({ x1: izq.right - base.left, x2: der.left - base.left, y });
-  });
-  let html = "";
-  geo.forEach((g) => { html += `<line x1="${g.x1}" y1="${g.y}" x2="${g.x2}" y2="${g.y}"/>`; });
-  if (geo.length === 2) {
-    const [a, b] = geo;
-    const jx = a.x2 - 16;
-    const medio = (a.y + b.y) / 2;
-    const entrada = b.x1 + 14;
+  svgEl.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svgEl.setAttribute("width", w);
+  svgEl.setAttribute("height", h);
+  const centro = (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2 - base.left, y: r.top + r.height / 2 - base.top, r };
+  };
+  const ex = f1.querySelectorAll(".extremo");
+  const a = centro(ex[0]);
+  const z = centro(ex[ex.length - 1]);
+  let html = `<line x1="${a.r.right - base.left}" y1="${a.y}" x2="${z.r.left - base.left}" y2="${a.y}"/>`;
+  if (conSplit) {
+    const s = centro(f1.querySelector('[data-id="@split"]'));
+    const m = centro(f1.querySelector('[data-id="@merge"]'));
+    const y2 = centro(f2.querySelector(".bloque.mas")).y;
     const r = 10;
-    html += `<path d="M${jx} ${a.y} V${medio - r} Q${jx} ${medio} ${jx - r} ${medio} H${entrada + r} ` +
-      `Q${entrada} ${medio} ${entrada} ${medio + r} V${b.y}"/>`;
-    html += `<circle cx="${jx}" cy="${a.y}" r="4"/><circle cx="${entrada}" cy="${b.y}" r="4"/>`;
+    html += `<path d="M${s.x} ${s.y} V${y2 - r} Q${s.x} ${y2} ${s.x + r} ${y2} H${m.x - r} ` +
+      `Q${m.x} ${y2} ${m.x} ${y2 - r} V${m.y}"/>`;
+  } else {
+    const p = centro(f2.querySelector(".punto-split"));
+    html += `<line class="tenue" x1="${p.x}" y1="${p.y}" x2="${p.x + 70}" y2="${p.y}"/>`;
   }
-  lineasSvg.innerHTML = html;
+  svgEl.innerHTML = html;
 }
 
-/* Arrastrar para reordenar. Un toque corto selecciona (abre perillas); si el dedo se mueve más
- * de 8 px, el bloque se levanta: un "fantasma" sigue al dedo y el original queda como hueco
- * que se corre entre los demás bloques de SU fila. Al soltar se manda el orden nuevo al
- * servidor, que reordena el rack y renumera el audio -- el cambio suena, no es solo visual.
- * Mono y estéreo son cadenas distintas del motor: un bloque no pasa de una fila a la otra. */
-function habilitarArrastre(el, fila, estereo, alTocar, alMantener) {
+/* El punto ● de la fila vacía: arrastrarlo y soltarlo en la fila de arriba, entre dos bloques,
+ * crea la línea paralela ahí (SPLIT) y la junta al final (MERGE) -- como Cortex. */
+function habilitarPuntoSplit(punto, f1) {
+  punto.addEventListener("pointerdown", (ev) => {
+    if (ev.button > 0) return;
+    ev.preventDefault();
+    const fantasma = nuevo("div", "punto-split fantasma-punto");
+    document.body.appendChild(fantasma);
+    const marca = nuevo("div", "marca-insercion");
+    const mover = (e) => {
+      fantasma.style.left = `${e.clientX - 9}px`;
+      fantasma.style.top = `${e.clientY - 9}px`;
+      const r1 = f1.getBoundingClientRect();
+      const encima = e.clientY > r1.top - 30 && e.clientY < r1.bottom + 20;
+      marca.remove();
+      if (encima) {
+        const destino = [...f1.querySelectorAll("[data-id]")].find((b) => {
+          const r = b.getBoundingClientRect();
+          return e.clientX < r.left + r.width / 2;
+        });
+        f1.insertBefore(marca, destino || f1.querySelector(".bloque.mas"));
+      }
+    };
+    const soltar = async (e) => {
+      removeEventListener("pointermove", mover);
+      removeEventListener("pointerup", soltar);
+      removeEventListener("pointercancel", soltar);
+      fantasma.remove();
+      if (!marca.parentNode || e.type === "pointercancel") { marca.remove(); return; }
+      const ids = [...f1.children].filter((c) => c.dataset && (c.dataset.id || c === marca))
+        .map((c) => (c === marca ? "@split" : c.dataset.id));
+      marca.remove();
+      await disponer([...ids, "@merge"], [], "Creating the parallel line… (first time takes a few seconds)");
+    };
+    mover(ev);
+    addEventListener("pointermove", mover);
+    addEventListener("pointerup", soltar);
+    addEventListener("pointercancel", soltar);
+  });
+}
+
+async function disponer(principal, paralela, avisoEspera = null) {
+  let t = null;
+  if (avisoEspera) t = setTimeout(() => aviso(avisoEspera), 400);
+  try {
+    const r = await api(`${rutaLinea()}/grid/disponer`, { principal, paralela });
+    estado.grid = r;
+    if (r.avisos && r.avisos.length) aviso(r.avisos[0]);
+    else aviso(avisoEspera ? "Parallel line created" : "Order changed");
+  } catch (e) {
+    aviso(e.message, true);
+  } finally {
+    clearTimeout(t);
+  }
+  if (estado.seleccion && !unidadSeleccionada()) estado.seleccion = null;
+  render();
+}
+
+async function quitarLinea() {
+  try {
+    estado.grid = await api(`${rutaLinea()}/grid/quitar_linea`, {});
+    estado.seleccion = null;
+    render();
+    aviso("Parallel line removed");
+  } catch (e) {
+    aviso(e.message, true);
+  }
+}
+
+/* Arrastrar para reordenar, dentro de una fila o entre las dos líneas. Un toque corto
+ * selecciona (abre perillas); si el dedo se mueve más de 8 px, el bloque se levanta: un
+ * "fantasma" sigue al dedo y el original queda como hueco que se corre entre los demás. Al
+ * soltar se manda la disposición nueva al servidor: el cambio suena, no es solo visual.
+ * SPLIT y MERGE se arrastran igual, pero solo dentro de la fila principal. */
+function habilitarArrastre(el, alTocar, alMantener, { soloPrincipal = false } = {}) {
   let inicio = null;
   let fantasma = null;
-  let ordenInicial = null;
+  let dispInicial = null;
   let tMantener = null;
-  const MANTENER_MS = 500;   // mantener apretado sin mover = menú del bloque (stomp A-H)
+  const MANTENER_MS = 500;   // mantener apretado sin mover = menú (stomp A-H / quitar línea)
 
-  const idsFila = () => [...fila.querySelectorAll(".bloque[data-id]")].map((b) => b.dataset.id);
+  const disposicionActual = () => {
+    const f1 = document.querySelector(".fila-principal");
+    const f2 = document.querySelector(".fila-paralela");
+    const ids = (f) => (f ? [...f.querySelectorAll("[data-id]")].map((b) => b.dataset.id) : []);
+    return { principal: ids(f1), paralela: ids(f2) };
+  };
 
-  // Los eventos se escuchan en `window`, no con setPointerCapture: mover el bloque dentro del
-  // DOM (para correr el hueco) le hace perder la captura al navegador, y desde ahí ni el
-  // movimiento ni el soltar le llegaban -- el arrastre quedaba colgado a mitad de camino.
+  // Eventos en `window`, no setPointerCapture: mover el bloque en el DOM (para correr el hueco)
+  // le hace perder la captura al navegador y el arrastre quedaba colgado a mitad de camino.
   const alMover = (ev) => mover(ev);
   const alSoltar = (ev) => terminar(ev, false);
   const alCancelar = (ev) => terminar(ev, true);
@@ -375,6 +500,15 @@ function habilitarArrastre(el, fila, estereo, alTocar, alMantener) {
     removeEventListener("pointercancel", alCancelar);
   }
 
+  function filaBajo(y) {
+    const f1 = document.querySelector(".fila-principal");
+    const f2 = document.querySelector(".fila-paralela");
+    if (soloPrincipal || !estado.grid.split || !f2) return f1;
+    const r1 = f1.getBoundingClientRect();
+    const r2 = f2.getBoundingClientRect();
+    return Math.abs(y - (r1.top + r1.height / 2)) <= Math.abs(y - (r2.top + r2.height / 2)) ? f1 : f2;
+  }
+
   function mover(ev) {
     if (!inicio || ev.pointerId !== inicio.id) return;
     const dx = ev.clientX - inicio.x;
@@ -382,7 +516,7 @@ function habilitarArrastre(el, fila, estereo, alTocar, alMantener) {
     if (!fantasma) {
       if (Math.hypot(dx, dy) < 8) return;
       clearTimeout(tMantener);
-      ordenInicial = idsFila();
+      dispInicial = disposicionActual();
       const r = el.getBoundingClientRect();
       fantasma = el.cloneNode(true);
       fantasma.classList.add("fantasma");
@@ -392,21 +526,20 @@ function habilitarArrastre(el, fila, estereo, alTocar, alMantener) {
       fantasma.style.top = `${r.top}px`;
       document.body.appendChild(fantasma);
       el.classList.add("hueco-arrastre");
-      fila.classList.add("fila-arrastre");
-      inicio.left = r.left;
-      inicio.top = r.top;
     }
     fantasma.style.transform = `translate(${dx}px, ${dy}px) scale(1.08)`;
-    // ¿Delante de qué bloque cae? El primero cuyo centro queda a la derecha del dedo.
-    const otros = [...fila.querySelectorAll(".bloque[data-id]")].filter((b) => b !== el);
+    const fila = filaBajo(ev.clientY);
+    // ¿Delante de qué elemento cae? El primero cuyo centro queda a la derecha del dedo.
+    const otros = [...fila.querySelectorAll("[data-id]")].filter((b) => b !== el);
     const destino = otros.find((b) => {
       const r = b.getBoundingClientRect();
       return ev.clientX < r.left + r.width / 2;
     });
-    const mas = fila.querySelector(".bloque.mas");
-    const referencia = destino || mas;
+    let referencia = destino || fila.querySelector(".bloque.mas");
+    if (referencia && referencia.previousElementSibling && referencia.previousElementSibling.classList.contains("separador-a")) {
+      referencia = referencia.previousElementSibling;    // no meterse entre el espaciador y el MERGE
+    }
     if (referencia && el.nextElementSibling !== referencia) fila.insertBefore(el, referencia);
-    // Auto-scroll horizontal cerca de los bordes (filas largas en el celular).
     const scroll = fila.closest(".grid-scroll");
     if (scroll) {
       const rs = scroll.getBoundingClientRect();
@@ -426,29 +559,22 @@ function habilitarArrastre(el, fila, estereo, alTocar, alMantener) {
     fantasma.remove();
     fantasma = null;
     el.classList.remove("hueco-arrastre");
-    fila.classList.remove("fila-arrastre");
-    const orden = idsFila();
-    if (cancelado || orden.join() === ordenInicial.join()) {
+    const disp = disposicionActual();
+    if (cancelado || JSON.stringify(disp) === JSON.stringify(dispInicial)) {
       renderGrid();
       return;
     }
-    try {
-      estado.grid = await api(`${rutaLinea()}/grid/ordenar`, { estereo, orden });
-      aviso("Order changed");
-    } catch (e) {
-      aviso(e.message, true);
-    }
-    render();
+    await disponer(disp.principal, disp.paralela);
   }
 }
 
-async function seleccionarBloque(id, estereo) {
+async function seleccionarBloque(id) {
   if (estado.seleccion && estado.seleccion.id === id) {
     estado.seleccion = null;
     render();
     return;
   }
-  estado.seleccion = { id, estereo };
+  estado.seleccion = { id };
   estado.parametros = [];
   render();
   try {
@@ -468,26 +594,34 @@ function renderPanel() {
     $panel.innerHTML = "";
     return;
   }
-  const c = cat(u.categoria);
+  const esRuteo = u.tipo === "split" || u.tipo === "merge";
+  const c = esRuteo
+    ? { nombre: "Parallel lines", color: "#E4E4E7", icono: u.tipo === "split" ? ICONO_SPLIT : ICONO_MERGE }
+    : cat(u.categoria);
   $panel.hidden = false;
   $panel.innerHTML = "";
   $panel.style.setProperty("--color", c.color);
 
+  const nombre = esRuteo ? (u.tipo === "split" ? "Split" : "Merge") : u.nombre;
+  const linea = esRuteo ? "" : ` · ${NOMBRE_TRAMO[u.tramo] || ""}`;
   const info = nuevo("div", "panel-info");
   info.appendChild(nuevo("div", "panel-cabeza",
     `<div class="icono-mini" style="--color:${c.color}">${svg(c.icono)}</div>` +
-    `<div class="panel-textos"><div class="panel-nombre">${esc(u.nombre)}</div>` +
-    `<div class="panel-cat">${esc(c.nombre)} · ${u.estereo ? "Stereo" : "Mono"}</div></div>`));
+    `<div class="panel-textos"><div class="panel-nombre">${esc(nombre)}</div>` +
+    `<div class="panel-cat">${esc(c.nombre)}${esRuteo ? "" : ` · ${u.estereo ? "Stereo" : "Mono"}`}${esc(linea)}</div></div>`));
 
   const acciones = nuevo("div", "panel-acciones");
-  const onoff = nuevo("button", "pildora" + (u.encendido ? " on" : ""), u.encendido ? "ON" : "BYPASS");
-  onoff.addEventListener("click", () => fijarEncendido(u, !u.encendido));
-  acciones.append(onoff);
-  // Los bloques fijos del motor (el Amp principal) no se pueden quitar: Guitarix se cae.
-  if (!u.fijo) {
+  let onoff = null;
+  if (esRuteo) {
+    const quitarL = nuevo("button", "pildora peligro", "REMOVE LINE");
+    quitarL.addEventListener("click", quitarLinea);
+    acciones.append(quitarL);
+  } else {
+    onoff = nuevo("button", "pildora" + (u.encendido ? " on" : ""), u.encendido ? "ON" : "BYPASS");
+    onoff.addEventListener("click", () => fijarEncendido(u, !u.encendido));
     const quitar = nuevo("button", "pildora peligro", "REMOVE");
     quitar.addEventListener("click", () => quitarBloque(u));
-    acciones.append(quitar);
+    acciones.append(onoff, quitar);
   }
   info.appendChild(acciones);
   const esc_ = escenaActiva();
@@ -497,7 +631,7 @@ function renderPanel() {
     aviso_.style.setProperty("--escena", esc_.color);
     info.appendChild(aviso_);
     const onoffParam = estado.parametros.find((p) => p.nombre === `${u.id}.on_off`);
-    if (onoffParam && onoffParam.de_escena) marcarDeEscena(onoff, onoffParam);
+    if (onoff && onoffParam && onoffParam.de_escena) marcarDeEscena(onoff, onoffParam);
   }
   $panel.appendChild(info);
 
@@ -513,7 +647,11 @@ function renderPanel() {
     } else if (p.min !== null && p.max !== null) {
       control = crearPerilla({
         valor: Number(p.valor), min: p.min, max: p.max, etiqueta: etiquetaLegible(p.etiqueta), color: c.color,
-        formatear: (v) => formatoValor(v, p.min, p.max),
+        // Balance y paneos del SPLIT/MERGE: arco desde el centro; niveles del MERGE en dB.
+        bipolar: /^(split\.balance|merge\.pan_)/.test(p.nombre),
+        formatear: (v) => (/^merge\.nivel_/.test(p.nombre) ? formatoDb(v)
+          : /^(split\.balance|merge\.pan_)/.test(p.nombre) ? formatoBalance(v, p.nombre)
+            : formatoValor(v, p.min, p.max)),
         onCambio: (v) => {
           p.valor = v;
           enviarParametro(p.nombre, v);
@@ -526,6 +664,13 @@ function renderPanel() {
     perillas.appendChild(control);
   }
   $panel.appendChild(perillas);
+}
+
+function formatoBalance(v, nombre) {
+  if (Math.abs(v) < 0.01) return nombre === "split.balance" ? "A = B" : "C";
+  const pct = Math.round(Math.abs(v) * 100);
+  if (nombre === "split.balance") return v < 0 ? `A +${pct}%` : `B +${pct}%`;
+  return `${pct}${v < 0 ? "L" : "R"}`;
 }
 
 function escenaActiva() {
@@ -683,20 +828,25 @@ function crearPerilla({ valor, min, max, etiqueta, color, bipolar = false, forma
 
 // -- Selector "+" (categorías -> modelos) ------------------------------------------------------
 
-async function abrirSelector(estereo) {
+const NOMBRE_TRAMO = { pre: "Main line", a: "Line A", b: "Line B", post: "After the merge" };
+
+/* "+": catálogo para un tramo. Mono y estéreo van juntos (el motor los ubica); lo único que se
+ * filtra es la regla del motor: con líneas paralelas, antes del SPLIT solo efectos mono. */
+async function abrirSelector(tramo) {
   let catalogo;
   try {
-    catalogo = await api(`${rutaLinea()}/plugins`);
+    catalogo = await api(`${rutaLinea()}/plugins?tramo=${encodeURIComponent(tramo)}`);
   } catch (e) {
     aviso(e.message, true);
     return;
   }
+  const soloMono = tramo === "pre" && estado.grid && estado.grid.split;
   const categorias = catalogo.categorias
-    .map((c) => ({ ...c, plugins: c.plugins.filter((p) => p.estereo === estereo) }))
+    .map((c) => ({ ...c, plugins: c.plugins.filter((p) => !(soloMono && p.estereo)) }))
     .filter((c) => c.plugins.length);
   mostrarCapa(true);
   $selector.hidden = false;
-  mostrarCategorias(categorias, estereo);
+  mostrarCategorias(categorias, tramo);
 }
 
 function cabeceraSelector(titulo, alVolver) {
@@ -713,9 +863,9 @@ function cabeceraSelector(titulo, alVolver) {
   return cab;
 }
 
-function mostrarCategorias(categorias, estereo) {
+function mostrarCategorias(categorias, tramo) {
   $selector.innerHTML = "";
-  $selector.appendChild(cabeceraSelector(estereo ? "Add block · Stereo row" : "Add block · Mono row"));
+  $selector.appendChild(cabeceraSelector(`Add block · ${NOMBRE_TRAMO[tramo] || tramo}`));
   const cuerpo = nuevo("div", "selector-cuerpo");
   const leyenda = nuevo("div", "leyenda");
   for (const c of categorias) {
@@ -723,37 +873,37 @@ function mostrarCategorias(categorias, estereo) {
     const b = nuevo("button", "item-leyenda",
       `<div class="icono-mini" style="--color:${info.color}">${svg(info.icono)}</div>` +
       `<div>${esc(info.nombre)}<small>${c.plugins.length} model${c.plugins.length === 1 ? "" : "s"}</small></div>`);
-    b.addEventListener("click", () => mostrarModelos(c, categorias, estereo));
+    b.addEventListener("click", () => mostrarModelos(c, categorias, tramo));
     leyenda.appendChild(b);
   }
   cuerpo.appendChild(leyenda);
   $selector.appendChild(cuerpo);
 }
 
-function mostrarModelos(c, categorias, estereo) {
+function mostrarModelos(c, categorias, tramo) {
   const info = cat(c.id);
   $selector.innerHTML = "";
-  $selector.appendChild(cabeceraSelector(info.nombre, () => mostrarCategorias(categorias, estereo)));
+  $selector.appendChild(cabeceraSelector(info.nombre, () => mostrarCategorias(categorias, tramo)));
   const cuerpo = nuevo("div", "selector-cuerpo");
   const lista = nuevo("div", "lista-modelos");
   for (const p of c.plugins) {
     const b = nuevo("button", "item-modelo",
       `<div class="icono-mini" style="--color:${info.color}">${svg(info.icono)}</div>` +
-      `<div>${esc(p.nombre)}<small>${p.en_cadena ? "Already in grid" : esc(p.id)}</small></div>`);
+      `<div>${esc(p.nombre)}<small>${p.en_cadena ? "Already in this line" : (p.estereo ? "Stereo" : "Mono")}</small></div>`);
     b.disabled = p.en_cadena;
-    b.addEventListener("click", () => insertarBloque(p, estereo));
+    b.addEventListener("click", () => insertarBloque(p, tramo));
     lista.appendChild(b);
   }
   cuerpo.appendChild(lista);
   $selector.appendChild(cuerpo);
 }
 
-async function insertarBloque(p, estereo) {
+async function insertarBloque(p, tramo) {
   try {
-    estado.grid = await api(`${rutaLinea()}/grid/insertar`, { unidad: p.id, estereo });
+    estado.grid = await api(`${rutaLinea()}/grid/insertar`, { unidad: p.id, tramo });
     cerrarCapas();
     aviso(`${p.nombre} added`);
-    await seleccionarBloque(p.id, estereo);
+    await seleccionarBloque(tramo === "pre" ? p.id : `${tramo}/${p.id}`);
   } catch (e) {
     aviso(e.message, true);
   }
@@ -1116,10 +1266,9 @@ function renderPresets() {
 
 function switchesStomp() {
   const e = estado.linea_estado;
+  const bloques = itemsGrid().filter((u) => u.tipo === "bloque");
   const enGrid = {};
-  for (const fila of (estado.grid ? estado.grid.filas : [])) {
-    for (const u of fila.unidades) enGrid[u.id] = u;
-  }
+  for (const u of bloques) enGrid[u.id] = u;
   if (e.stomps.length) {
     // Cada stomp en SU letra (pie de la pedalera); las letras libres quedan como hueco.
     const slots = new Array(8).fill(null);
@@ -1136,11 +1285,7 @@ function switchesStomp() {
     while (slots.length && slots[slots.length - 1] === null) slots.pop();
     return slots;
   }
-  const unidades = [];
-  for (const fila of (estado.grid ? estado.grid.filas : [])) {
-    for (const u of fila.unidades) unidades.push({ ...u, estereo: fila.estereo });
-  }
-  return unidades.slice(0, 8).map((u) => ({
+  return bloques.slice(0, 8).map((u) => ({
     nombre: u.nombre,
     categoria: u.categoria,
     on: u.encendido,
