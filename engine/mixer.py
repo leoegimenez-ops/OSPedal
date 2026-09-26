@@ -124,6 +124,22 @@ def mezclar_estereo(
     return mezclar(entradas, ganancias_l), mezclar(entradas, ganancias_r)
 
 
+def mezclar_fuentes_estereo(
+    entradas_l: dict[str, np.ndarray],
+    entradas_r: dict[str, np.ndarray],
+    ganancias: dict[str, float],
+    paneos: dict[str, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Como `mezclar_estereo()`, pero cada fuente ya es estéreo (L/R propios): el paneo actúa
+    como balance -- baja el canal opuesto, nunca mezcla L en R. Con L == R (una fuente mono
+    duplicada) da exactamente lo mismo que `mezclar_estereo()`."""
+    ganancias_l: dict[str, float] = {}
+    ganancias_r: dict[str, float] = {}
+    for f, g in ganancias.items():
+        ganancias_l[f], ganancias_r[f] = ganancias_pan(g, paneos.get(f, 0.0))
+    return mezclar(entradas_l, ganancias_l), mezclar(entradas_r, ganancias_r)
+
+
 def mono_desde_estereo(izquierda: np.ndarray, derecha: np.ndarray) -> np.ndarray:
     """Fold-down a mono de una mezcla estéreo: promedio simple de L y R."""
     return (izquierda + derecha) * np.float32(0.5)
@@ -145,7 +161,11 @@ class MezcladorJack:
         nombre_cliente: str = "pedalsistema_mixer",
         ganancia_inicial: float = 1.0,
         modo_buses: dict[str, str] | None = None,
+        entradas_estereo: bool = False,
     ) -> None:
+        """`entradas_estereo`: cada fuente entra por dos puertos (`<fuente>_L`, `<fuente>_R`)
+        en vez de uno. Hace falta desde las líneas paralelas: una línea que termina en efectos
+        estéreo (o en el MERGE) sale en estéreo y no tiene sentido aplastarla a mono acá."""
         if jack is None:
             raise ErrorDeMezclador(
                 "Falta el paquete 'jack' (JACK-Client). Instalar en el venv del proyecto: "
@@ -177,8 +197,17 @@ class MezcladorJack:
         }
         self.paneos: dict[str, dict[str, float]] = {f: {b: 0.0 for b in buses} for f in fuentes}
 
+        self.entradas_estereo = entradas_estereo
         self._client = jack.Client(nombre_cliente)
-        self._in_ports = {f: self._client.inports.register(f) for f in fuentes}
+        if entradas_estereo:
+            self._in_ports_lr = {
+                f: {"L": self._client.inports.register(f"{f}_L"),
+                    "R": self._client.inports.register(f"{f}_R")}
+                for f in fuentes
+            }
+            self._in_ports = {f: p["L"] for f, p in self._in_ports_lr.items()}
+        else:
+            self._in_ports = {f: self._client.inports.register(f) for f in fuentes}
         self._out_ports: dict[str, dict[str, "jack.OwnPort"]] = {}
         for b in buses:
             if self.modo_bus[b] == "estereo":
@@ -192,11 +221,18 @@ class MezcladorJack:
         self._activo = False
 
     def _procesar(self, frames: int) -> None:
-        entradas = {f: self._in_ports[f].get_array() for f in self.fuentes}
+        if self.entradas_estereo:
+            entradas_l = {f: p["L"].get_array() for f, p in self._in_ports_lr.items()}
+            entradas_r = {f: p["R"].get_array() for f, p in self._in_ports_lr.items()}
+        else:
+            entradas = {f: self._in_ports[f].get_array() for f in self.fuentes}
         for b in self.buses:
             ganancias_bus = {f: self.ganancias[f][b] for f in self.fuentes}
             paneos_bus = {f: self.paneos[f][b] for f in self.fuentes}
-            izq, der = mezclar_estereo(entradas, ganancias_bus, paneos_bus)
+            if self.entradas_estereo:
+                izq, der = mezclar_fuentes_estereo(entradas_l, entradas_r, ganancias_bus, paneos_bus)
+            else:
+                izq, der = mezclar_estereo(entradas, ganancias_bus, paneos_bus)
             puertos = self._out_ports[b]
             if self.modo_bus[b] == "estereo":
                 puertos["L"].get_array()[:] = izq
@@ -259,12 +295,23 @@ class MezcladorJack:
 
     # -- Ruteo JACK (conectar puertos externos a este mezclador) ------------------
 
-    def conectar_entrada(self, fuente: str, puerto_externo: str) -> None:
+    def conectar_entrada(self, fuente: str, puerto_externo: str, canal: str | None = None) -> None:
         """Conecta la salida de otro cliente JACK (p. ej. `gx_head_amp:out_0`) a la entrada
-        `fuente` de este mezclador."""
+        `fuente` de este mezclador. Con entradas estéreo, `canal` es "L" o "R"."""
         if fuente not in self._in_ports:
             raise ErrorDeMezclador(f"fuente desconocida: {fuente!r}. Válidas: {self.fuentes}")
-        self._client.connect(puerto_externo, self._in_ports[fuente])
+        if self.entradas_estereo:
+            if canal not in ("L", "R"):
+                raise ErrorDeMezclador("entradas estéreo: hace falta canal='L' o canal='R'")
+            self._client.connect(puerto_externo, self._in_ports_lr[fuente][canal])
+        else:
+            self._client.connect(puerto_externo, self._in_ports[fuente])
+
+    def puerto_entrada(self, fuente: str, canal: str | None = None) -> str:
+        """Nombre completo del puerto de entrada (para cablear desde afuera)."""
+        if self.entradas_estereo:
+            return self._in_ports_lr[fuente][canal or "L"].name
+        return self._in_ports[fuente].name
 
     def conectar_salida(self, bus: str, puerto_externo: str, canal: str | None = None) -> None:
         """Conecta un puerto de salida del bus `bus` a un puerto externo (p. ej. una salida

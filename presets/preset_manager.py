@@ -28,6 +28,7 @@ PRESETS_POR_BANCO = 8
 MAX_PRESETS = MAX_BANCOS * PRESETS_POR_BANCO  # 256
 MAX_ESCENAS = 8  # A-H, una por switch de la pedalera -- mismo tope que schema.json
 PIES_STOMP = 8   # A-H: pies de la pedalera asignables a un stomp
+TRAMOS_LINEA = ("pre", "a", "b", "post")   # tramos de un instrumento con líneas paralelas
 
 # Valores aceptados como parámetro por el motor (jsonrpc.cpp:1008-1031).
 TIPOS_VALOR = (int, float, bool, str)
@@ -146,10 +147,32 @@ class Preset:
     # guardar del GRID. Opcional: un preset sin cadena no toca el rack al cargarse (comportamiento
     # anterior, compatible con setlists viejas).
     cadena: dict[str, list[str]] | None = None
+    # Líneas paralelas (como Cortex): {"split": bool, "amp": {tramo: visible}, "tramos": {"a": [...],
+    # "b": [...], "post": [...]}}. None = una sola línea con el Amp visible (lo de siempre). Los
+    # valores de esos bloques van en `parametros` con nombres calificados ("a/ts9sim.drive",
+    # "merge.nivel_b"). Ver engine/disposicion.py.
+    paralelo: dict[str, Any] | None = None
 
     @classmethod
     def desde_dict(cls, datos: dict[str, Any], ruta: str) -> Preset:
         _exigir(isinstance(datos, dict), ruta, "debe ser un objeto")
+
+        paralelo = datos.get("paralelo")
+        if paralelo is not None:
+            r = f"{ruta}.paralelo"
+            _exigir(isinstance(paralelo, dict), r, "debe ser un objeto")
+            _exigir(isinstance(paralelo.get("split", False), bool), f"{r}.split", "debe ser booleano")
+            amp = paralelo.get("amp", {})
+            _exigir(isinstance(amp, dict) and all(k in TRAMOS_LINEA and isinstance(v, bool) for k, v in amp.items()),
+                    f"{r}.amp", f"tramo -> booleano; tramos: {', '.join(TRAMOS_LINEA)}")
+            tramos = paralelo.get("tramos", {})
+            _exigir(isinstance(tramos, dict), f"{r}.tramos", "debe ser un objeto")
+            for t, unidades in tramos.items():
+                _exigir(t in ("a", "b", "post"), f"{r}.tramos.{t}", "tramo desconocido (a, b, post)")
+                _exigir(isinstance(unidades, list) and all(isinstance(u, str) and u for u in unidades),
+                        f"{r}.tramos.{t}", "debe ser una lista de ids de unidad")
+                _exigir(len(unidades) == len(set(unidades)), f"{r}.tramos.{t}",
+                        "el mismo modelo va una vez por tramo")
 
         cadena = None
         if "cadena" in datos:
@@ -211,6 +234,7 @@ class Preset:
                      for i, e in enumerate(escenas_crudo)],
             notas=_texto(datos, "notas", ruta, obligatorio=False),
             cadena=cadena,
+            paralelo=paralelo,
         )
 
     def a_dict(self) -> dict[str, Any]:
@@ -231,6 +255,12 @@ class Preset:
             salida["notas"] = self.notas
         if self.cadena is not None:
             salida["cadena"] = {k: list(v) for k, v in self.cadena.items()}
+        if self.paralelo is not None:
+            salida["paralelo"] = {
+                "split": bool(self.paralelo.get("split", False)),
+                "amp": dict(self.paralelo.get("amp", {})),
+                "tramos": {t: list(u) for t, u in self.paralelo.get("tramos", {}).items()},
+            }
         return salida
 
     @staticmethod

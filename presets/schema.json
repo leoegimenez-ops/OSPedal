@@ -78,6 +78,31 @@
             "mono": { "type": "array", "items": { "type": "string", "minLength": 1 } },
             "estereo": { "type": "array", "items": { "type": "string", "minLength": 1 } }
           }
+        },
+        "paralelo": {
+          "description": "Líneas paralelas (como Cortex): SPLIT/MERGE, bloques de las líneas A, B y de después del MERGE, y en qué tramo se ve el Amp. Los valores de esos bloques van en 'parametros' con nombres calificados ('a/ts9sim.drive', 'merge.nivel_b').",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "split": { "type": "boolean" },
+            "amp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "pre": { "type": "boolean" }, "a": { "type": "boolean" },
+                "b": { "type": "boolean" }, "post": { "type": "boolean" }
+              }
+            },
+            "tramos": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "a": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+                "b": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+                "post": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+              }
+            }
+          }
         }
       }
     },

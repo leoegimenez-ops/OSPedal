@@ -66,9 +66,15 @@ from pydantic import BaseModel
 
 from engine.categorias import CATEGORIAS, categoria, fijos, insertables, nombres
 from engine.controlador import ControladorEscenario
+from engine.disposicion import AMP, MERGE, SPLIT, ErrorDisposicion, GestorLineas
 from engine.midi_engine import Accion
 from engine.mixer import ErrorDeMezclador, MezcladorJack
+from engine.motor_linea import MotorLinea, separar
+from engine.motores import ErrorMotores, Orquestador, plan_cableado
+from engine.paralelo import ErrorParalelo, RuteadorParalelo
 from engine.rpc_client import GuitarixError, GuitarixRPC
+from engine.ruteo import ETIQUETAS as ETIQUETAS_RUTEO
+from engine.ruteo import PARAMETROS as PARAMETROS_RUTEO
 from presets.preset_manager import ErrorDeSetlist, Setlist
 
 HOST_GUITARIX = os.environ.get("GX_HOST", "127.0.0.1")
@@ -116,10 +122,60 @@ def _config_lineas() -> dict[str, dict[str, Any]]:
 
 LINEAS = _config_lineas()
 
+# El servidor levanta los Guitarix que falten (uno por tramo, ver engine/motores.py). En desarrollo
+# o si otro proceso los administra (systemd en el OS), PS_LANZAR_MOTORES=0 solo se conecta.
+LANZAR_MOTORES = os.environ.get("PS_LANZAR_MOTORES", "1") == "1"
+
 _gx: GuitarixRPC | None = None
 _mezclador: MezcladorJack | None = None
+_orquestador: Orquestador | None = None
+_ruteador: RuteadorParalelo | None = None
 _controladores: dict[str, ControladorEscenario] = {}
 _cache_plugins: dict[str, list[dict[str, Any]]] = {}
+# Último problema de cableado JACK por línea (un puerto que falta, JACK caído...): se informa en
+# /lineas/{linea}/estado en vez de romper, porque el control (presets, perillas) sigue andando.
+_problemas_ruteo: dict[str, list[str]] = {}
+
+
+def _orq() -> Orquestador:
+    global _orquestador
+    if _orquestador is None:
+        _orquestador = Orquestador(
+            list(LINEAS), host=HOST_GUITARIX, lanzar=LANZAR_MOTORES,
+            puertos_pre={n: c["puerto"] for n, c in LINEAS.items()},
+        )
+    return _orquestador
+
+
+def _ruteo() -> RuteadorParalelo:
+    """Los clientes JACK del SPLIT y el MERGE de todas las líneas (engine/paralelo.py)."""
+    global _ruteador
+    if _ruteador is None:
+        try:
+            r = RuteadorParalelo(list(LINEAS))
+            r.iniciar()
+        except Exception as exc:  # noqa: BLE001 -- sin JACK: el control sigue, el audio paralelo no
+            raise HTTPException(503, f"SPLIT/MERGE no disponible (¿JACK corriendo?): {exc}")
+        _ruteador = r
+    return _ruteador
+
+
+def _recablear(linea: str, split: bool, con_post: bool) -> None:
+    """Cablea en JACK el camino de la señal de una línea según su disposición: sin paralelo
+    (pre → mezclador), con SPLIT/MERGE, y con o sin tramo después del MERGE."""
+    try:
+        rt = _ruteo()
+        rt.activar(linea, split)
+        try:
+            mx = _mixer()
+            destinos = ((mx.puerto_entrada(linea, "L"), mx.puerto_entrada(linea, "R"))
+                        if linea in mx.fuentes else ("", ""))
+        except HTTPException:
+            destinos = ("", "")
+        plan = plan_cableado(linea, split, con_post, rt.puerto_split, rt.puerto_merge, *destinos)
+        _problemas_ruteo[linea] = Orquestador.aplicar(rt.cliente, plan)
+    except HTTPException as exc:
+        _problemas_ruteo[linea] = [str(exc.detail)]
 
 
 def _linea(nombre: str) -> ControladorEscenario:
@@ -129,7 +185,11 @@ def _linea(nombre: str) -> ControladorEscenario:
         raise HTTPException(404, f"línea desconocida: {nombre!r}. Válidas: {list(LINEAS)}")
     if nombre not in _controladores:
         cfg = LINEAS[nombre]
-        gx = GuitarixRPC(HOST_GUITARIX, cfg["puerto"])
+        try:
+            puerto = _orq().asegurar(nombre, "pre")
+        except ErrorMotores as exc:
+            raise HTTPException(503, f"No se pudo conectar la línea {nombre!r}: {exc}")
+        gx = GuitarixRPC(HOST_GUITARIX, puerto)
         try:
             gx.conectar()
         except OSError as exc:
@@ -145,7 +205,26 @@ def _linea(nombre: str) -> ControladorEscenario:
         except ErrorDeSetlist as exc:
             gx.cerrar()
             raise HTTPException(500, f"Setlist inválida para la línea {nombre!r}: {exc}")
-        _controladores[nombre] = ControladorEscenario(setlist, gx)
+
+        def abrir_tramo(tramo: str, _n: str = nombre) -> GuitarixRPC:
+            try:
+                rpc = GuitarixRPC(HOST_GUITARIX, _orq().asegurar(_n, tramo))
+                rpc.conectar()
+            except (ErrorMotores, OSError) as exc:
+                raise ConnectionError(f"No se pudo levantar el motor {_n}/{tramo}: {exc}")
+            return rpc
+
+        def fijar_ruteo(parametro: str, valor: Any, _n: str = nombre) -> None:
+            try:
+                _ruteo().fijar(_n, parametro, valor)
+            except ErrorParalelo as exc:
+                raise ValueError(str(exc))
+
+        motor = MotorLinea(gx, abrir_tramo, fijar_ruteo, lambda _n=nombre: _ruteo().valores(_n))
+        ctrl = ControladorEscenario(setlist, motor)
+        ctrl.lineas = GestorLineas(motor, lambda s, p, _n=nombre: _recablear(_n, s, p))
+        _controladores[nombre] = ctrl
+        _recablear(nombre, False, False)      # desde el arranque: instrumento → motor → mezclador
     return _controladores[nombre]
 
 
@@ -165,7 +244,10 @@ def _mixer() -> MezcladorJack:
     global _mezclador
     if _mezclador is None:
         try:
-            m = MezcladorJack(FUENTES_MIXER, BUSES_MIXER, modo_buses=MODO_BUSES_MIXER)
+            # Entradas estéreo: cada instrumento llega en L/R (sus efectos estéreo y el MERGE
+            # de las líneas paralelas no se aplastan a mono antes de la mezcla).
+            m = MezcladorJack(FUENTES_MIXER, BUSES_MIXER, modo_buses=MODO_BUSES_MIXER,
+                              entradas_estereo=True)
             m.iniciar()
         except ErrorDeMezclador as exc:
             raise HTTPException(503, f"No se pudo iniciar el mezclador: {exc}")
@@ -194,6 +276,8 @@ async def lifespan(_app: FastAPI):
         _gx.cerrar()
     if _mezclador is not None:
         _mezclador.detener()
+    if _ruteador is not None:
+        _ruteador.detener()
     for ctrl in _controladores.values():
         ctrl.rpc.cerrar()
 
@@ -369,7 +453,10 @@ def _categorias_gx(linea: str) -> dict[str, str | None]:
 
 
 def _cadena_actual(ctrl: ControladorEscenario) -> set[str] | None:
+    """Ids (calificados) de todos los bloques visibles del instrumento, en todas sus líneas."""
     try:
+        if ctrl.lineas is not None:
+            return {q for ids in ctrl.lineas.disposicion()["tramos"].values() for q in ids}
         return set(ctrl.rpc.orden_rack(0)) | set(ctrl.rpc.orden_rack(1))
     except ConnectionError:
         return None
@@ -393,6 +480,8 @@ def _estado_linea(ctrl: ControladorEscenario, linea: str | None = None) -> dict:
         "presets_banco_visible": [p.nombre for p in banco_vis.presets],
         "modo": ctrl.modo.value,
         "escena_activa": ctrl.escena_activa,
+        "lineas_paralelas": bool(ctrl.lineas and ctrl.lineas.split),
+        "problemas_audio": _problemas_ruteo.get(linea or "", []),
         "tempo_bpm": ctrl.tempo_bpm,
         "stomps": [
             {
@@ -495,7 +584,34 @@ def _grid(linea: str) -> dict:
                 for u in ids
             ],
         })
-    return {"filas": filas}
+    salida: dict[str, Any] = {"filas": filas}
+    if ctrl.lineas is not None:
+        # Formato por líneas (como Cortex): la fila principal con SPLIT/MERGE como elementos y
+        # la paralela. Es lo que dibuja la app; "filas" queda por compatibilidad.
+        disp = ctrl.lineas.disposicion()
+        bloques = [q for ids in disp["tramos"].values() for q in ids]
+        encendido = ctrl.rpc.obtener(*[f"{q}.on_off" for q in bloques]) if bloques else {}
+
+        def item(q: str) -> dict[str, Any]:
+            if q in (SPLIT, MERGE):
+                return {"id": q, "tipo": "split" if q == SPLIT else "merge"}
+            tramo, base = separar(q)
+            return {
+                "id": q, "tipo": "bloque", "tramo": tramo, "base": base,
+                "nombre": nombre_de.get(base, base),
+                "categoria": categoria(base, cat_gx.get(base)),
+                "encendido": bool(encendido.get(f"{q}.on_off")),
+                "estereo": ctrl.lineas.es_estereo(base),
+                "fijo": False,             # el Amp se "quita" ocultándolo (engine/disposicion.py)
+                "pie": pies.get(q),
+            }
+
+        salida.update({
+            "split": disp["split"],
+            "principal": [item(q) for q in disp["principal"]],
+            "paralela": [item(q) for q in disp["paralela"]],
+        })
+    return salida
 
 
 @app.get("/lineas/{linea}/grid")
@@ -504,13 +620,20 @@ def grid_linea(linea: str) -> dict:
 
 
 @app.get("/lineas/{linea}/plugins")
-def plugins_linea(linea: str) -> dict:
+def plugins_linea(linea: str, tramo: str = "pre") -> dict:
     """Bloques que se pueden agregar desde el "+", agrupados por categoría de interfaz en el
-    orden de la leyenda. Solo aparecen las categorías que tienen al menos un modelo real."""
+    orden de la leyenda. Solo aparecen las categorías que tienen al menos un modelo real.
+    `tramo`: dónde va a caer el bloque ("en_cadena" = ese modelo ya está en ESE tramo)."""
+    ctrl = _linea(linea)
     lista = insertables(_plugins(linea))
-    en_rack = _cadena_actual(_linea(linea)) or set()
+    lista.append({"id": AMP, "nombre": nombres(_plugins(linea)).get(AMP, "Amp"),
+                  "categoria": "amp", "estereo": False})
+    if ctrl.lineas is not None and tramo in ctrl.lineas.tramos_activos():
+        presentes = set(ctrl.lineas.unidades(tramo))
+    else:
+        presentes = {separar(q)[1] for q in (_cadena_actual(ctrl) or set()) if separar(q)[0] == "pre"}
     for p in lista:
-        p["en_cadena"] = p["id"] in en_rack
+        p["en_cadena"] = p["id"] in presentes
     categorias = [
         {"id": clave, "nombre": nombre, "plugins": [p for p in lista if p["categoria"] == clave]}
         for clave, nombre in CATEGORIAS
@@ -520,31 +643,32 @@ def plugins_linea(linea: str) -> dict:
 
 class CambiarBloque(BaseModel):
     unidad: str
-    estereo: bool = False
+    # Viejo: fila mono/estéreo. Hoy el motor lo decide solo; si viene y no coincide, 400.
+    estereo: bool | None = None
+    tramo: str = "pre"          # pre | a | b | post (ver engine/disposicion.py)
 
 
 def _validar_insertable(linea: str, datos: CambiarBloque) -> None:
+    if datos.unidad == AMP:
+        return                   # el Amp se "agrega" mostrándolo (nunca se inserta: tumba al motor)
     validos = {p["id"]: p for p in insertables(_plugins(linea))}
     if datos.unidad not in validos:
         raise HTTPException(404, f"bloque desconocido: {datos.unidad!r}")
-    if validos[datos.unidad]["estereo"] != datos.estereo:
+    if datos.estereo is not None and validos[datos.unidad]["estereo"] != datos.estereo:
         fila = "estéreo" if datos.estereo else "mono"
         raise HTTPException(400, f"{datos.unidad!r} no va en la fila {fila}")
 
 
 @app.post("/lineas/{linea}/grid/insertar")
 def insertar_bloque(linea: str, datos: CambiarBloque) -> dict:
-    """Agrega un bloque al final de su fila y lo deja encendido. Cada unidad existe una sola
-    vez en el motor: si ya está en el rack, 409."""
+    """Agrega un bloque al final de su tramo, encendido y sonando donde se ve (renumera). El
+    mismo modelo va una vez por tramo: si ya está, 409."""
     _validar_insertable(linea, datos)
     ctrl = _linea(linea)
-    if datos.unidad in (_cadena_actual(ctrl) or set()):
-        raise HTTPException(409, f"{datos.unidad!r} ya está en el rack")
-    ctrl.rpc.insertar_unidad(datos.unidad, "", datos.estereo)
-    ctrl.rpc.fijar(f"{datos.unidad}.on_off", 1)
-    # Sin renumerar, el bloque se ve al final pero suena donde diga su `position` por defecto
-    # (p.ej. antes del amp aunque se muestre después) -- ver GuitarixRPC.renumerar.
-    ctrl.rpc.renumerar(int(datos.estereo))
+    try:
+        ctrl.lineas.insertar(datos.unidad, datos.tramo)
+    except ErrorDisposicion as exc:
+        raise HTTPException(409 if "already" in str(exc) else 400, str(exc))
     if ctrl.tempo_bpm:
         ctrl._aplicar_tempo()
     return _grid(linea)
@@ -552,15 +676,45 @@ def insertar_bloque(linea: str, datos: CambiarBloque) -> dict:
 
 @app.post("/lineas/{linea}/grid/quitar")
 def quitar_bloque(linea: str, datos: CambiarBloque) -> dict:
-    """Los bloques fijos (ampstack y compañía) se rechazan con 400: quitarlos hace segfault en
-    Guitarix -- confirmado el 25/09/2026, tumbó el motor desde la PWA. Ver engine/categorias.py."""
-    if datos.unidad in fijos(_plugins(linea)):
-        raise HTTPException(400, f"{datos.unidad!r} es un bloque fijo del motor: no se puede quitar")
+    """Quita un bloque (id calificado: "ts9sim", "a/echo", ...). El Amp no se quita del motor --
+    eso hace segfault en Guitarix (confirmado 25/09/2026)--: se oculta y se bypasea."""
     ctrl = _linea(linea)
-    if datos.unidad not in ctrl.rpc.orden_rack(int(datos.estereo)):
-        raise HTTPException(404, f"{datos.unidad!r} no está en esa fila")
-    ctrl.rpc.quitar_unidad(datos.unidad, datos.estereo)
-    ctrl.rpc.renumerar(int(datos.estereo))
+    try:
+        ctrl.lineas.quitar(datos.unidad)
+    except ErrorDisposicion as exc:
+        raise HTTPException(404, str(exc))
+    return _grid(linea)
+
+
+class DisponerLineas(BaseModel):
+    principal: list[str]          # ids calificados + "@split" / "@merge"
+    paralela: list[str] = []
+
+
+@app.post("/lineas/{linea}/grid/disponer")
+def disponer_lineas(linea: str, datos: DisponerLineas) -> dict:
+    """Arrastrar en el GRID: mover bloques dentro y entre líneas, crear la línea paralela
+    (soltar el punto ● en la fila de arriba = aparece el SPLIT), mover el MERGE. Mueve los
+    bloques entre motores con sus ajustes y cambia el audio real. La primera vez que se crea la
+    línea paralela se levantan sus motores (tarda unos segundos)."""
+    ctrl = _linea(linea)
+    try:
+        avisos = ctrl.lineas.disponer(datos.principal, datos.paralela)
+    except ErrorDisposicion as exc:
+        raise HTTPException(400, str(exc))
+    except ConnectionError as exc:
+        raise HTTPException(503, str(exc))
+    if ctrl.tempo_bpm:
+        ctrl._aplicar_tempo()
+    return {"avisos": avisos, **_grid(linea)}
+
+
+@app.post("/lineas/{linea}/grid/quitar_linea")
+def quitar_linea_paralela(linea: str) -> dict:
+    """Deshace la línea paralela: A y lo de después del MERGE vuelven a la fila principal con sus
+    ajustes; lo de la línea B se quita."""
+    ctrl = _linea(linea)
+    ctrl.lineas.quitar_linea()
     return _grid(linea)
 
 
@@ -730,15 +884,25 @@ def cadena_linea(linea: str) -> list[str]:
     return _linea(linea).rpc.orden_rack(0)
 
 
-@app.get("/lineas/{linea}/unidad/{unidad}")
+@app.get("/lineas/{linea}/unidad/{unidad:path}")
 def unidad_linea(linea: str, unidad: str) -> dict:
     """Parámetros controlables de una unidad del rack (`queryunit`, reordenado) -- arma los
-    knobs cuando se toca un bloque en el editor de nodos."""
+    knobs cuando se toca un bloque en el editor de nodos. `unidad` puede venir calificada por
+    tramo ("a/ts9sim") o ser el SPLIT / MERGE ("@split", "@merge")."""
     ctrl = _linea(linea)
+    propios = ctrl.propios_de_escena()
+    if unidad in (SPLIT, MERGE):
+        prefijo = "split." if unidad == SPLIT else "merge."
+        valores = ctrl.rpc.obtener(*[n for n in PARAMETROS_RUTEO if n.startswith(prefijo)])
+        parametros = [
+            {"nombre": n, "etiqueta": ETIQUETAS_RUTEO[n], "tipo": tipo, "min": minimo, "max": maximo,
+             "paso": None, "valor": valores.get(n), "de_escena": n in propios}
+            for n, (_obj, _attr, minimo, maximo, tipo) in PARAMETROS_RUTEO.items() if n.startswith(prefijo)
+        ]
+        return {"unidad": unidad, "escena": ctrl.escena_activa, "parametros": parametros}
     crudo = ctrl.rpc.consultar_unidad(unidad)
     if not crudo:
         raise HTTPException(404, f"unidad desconocida o sin parámetros: {unidad!r}")
-    propios = ctrl.propios_de_escena()
     parametros = _parametros_unidad(crudo)
     for p in parametros:
         p["de_escena"] = p["nombre"] in propios

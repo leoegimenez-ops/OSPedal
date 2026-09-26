@@ -55,7 +55,9 @@ class GXFalso:
         self.falla_conectar = False
         self.falla_version = None  # GuitarixError, si se quiere simular un error del motor
         self.falla_conexion = False  # simula que el socket se corto a mitad de pedido
-        self.rack = {0: ["ampstack", "freeverb"], 1: []}
+        # Los motores de tramos extra (líneas paralelas, puertos 71xx) arrancan solo con el Amp.
+        self.rack = {0: ["ampstack", "freeverb"], 1: []} if puerto < 7100 else {0: ["ampstack"], 1: []}
+        self.puerto = puerto
         self.valores = {}
         GXFalso.instancias.append(self)
 
@@ -130,6 +132,10 @@ class GXFalso:
                                          "upper_bound": 20, "step": 0.1,
                                          "value": {"amp2.stage1.Pregain": -6}},
             }
+        if unidad in self.rack[0] + self.rack[1]:
+            # Como el motor real: todo bloque del rack tiene al menos su on/off.
+            n = f"{unidad}.on_off"
+            return {n: {"name": "on/off", "type": "bool", "value": {n: self.valores.get(n, 1)}}}
         return {}
 
     def set_preset(self, banco, preset):
@@ -160,7 +166,8 @@ class MixerFalso:
     instancias: list["MixerFalso"] = []
 
     def __init__(self, fuentes, buses, nombre_cliente="pedalsistema_mixer", ganancia_inicial=1.0,
-                 modo_buses=None):
+                 modo_buses=None, entradas_estereo=False):
+        self.entradas_estereo = entradas_estereo
         self.fuentes = list(fuentes)
         self.buses = list(buses)
         modo_buses = modo_buses or {}
@@ -173,6 +180,9 @@ class MixerFalso:
     def iniciar(self):
         if self.falla_iniciar:
             raise api.ErrorDeMezclador("jackd no está corriendo (simulado)")
+
+    def puerto_entrada(self, fuente, canal=None):
+        return f"pedalsistema_mixer:{fuente}_{canal or 'L'}"
 
     def detener(self):
         pass
@@ -197,6 +207,61 @@ class MixerFalso:
                 for f in self.fuentes}
 
 
+class RuteadorFalso:
+    """Reemplaza al SPLIT/MERGE de JACK: guarda lo que se le pide."""
+
+    def __init__(self, lineas, prefijo="ps"):
+        from engine.ruteo import PARAMETROS
+        self.activos = {}
+        self.vals = {l: {n: (False if t == "bool" else (1.0 if "nivel" in n else 0.0))
+                         for n, (_o, _a, _mi, _ma, t) in PARAMETROS.items()} for l in lineas}
+        self.cliente = None
+
+    def iniciar(self):
+        pass
+
+    def detener(self):
+        pass
+
+    def activar(self, linea, activo):
+        self.activos[linea] = activo
+
+    def fijar(self, linea, nombre, valor):
+        if nombre not in self.vals[linea]:
+            raise api.ErrorParalelo(f"parámetro desconocido: {nombre!r}")
+        self.vals[linea][nombre] = valor
+
+    def valores(self, linea):
+        return dict(self.vals[linea])
+
+    def puerto_split(self, linea, cual):
+        return f"ps_split:{linea}_{cual}"
+
+    def puerto_merge(self, linea, cual):
+        return f"ps_merge:{linea}_{cual}"
+
+
+class OrquestadorFalso:
+    """Reemplaza al que levanta Guitarix: devuelve puertos; los GXFalso hacen de motores."""
+    cableados = []
+
+    def __init__(self, lineas, host="127.0.0.1", lanzar=True, puertos_pre=None, **_kw):
+        from engine.motores import puerto_rpc
+        self._puerto_rpc = puerto_rpc
+        self.indices = {l: i for i, l in enumerate(lineas)}
+        self.puertos_pre = puertos_pre or {}
+
+    def asegurar(self, linea, tramo):
+        if tramo == "pre" and linea in self.puertos_pre:
+            return self.puertos_pre[linea]
+        return self._puerto_rpc(self.indices[linea], tramo)
+
+    @staticmethod
+    def aplicar(cliente, plan):
+        OrquestadorFalso.cableados.append(plan)
+        return []
+
+
 def reset():
     """Vuelve api._gx/_mezclador/_controladores a None para que el próximo endpoint cree fakes
     nuevas."""
@@ -206,12 +271,18 @@ def reset():
     api._mezclador = None
     api._controladores.clear()
     api._cache_plugins.clear()
+    api._orquestador = None
+    api._ruteador = None
+    api._problemas_ruteo.clear()
+    OrquestadorFalso.cableados.clear()
     for f in Path(_DIR_SETLISTS_TEST).glob("*.json"):
         f.unlink()
 
 
 api.GuitarixRPC = GXFalso
 api.MezcladorJack = MixerFalso
+api.RuteadorParalelo = RuteadorFalso
+api.Orquestador = OrquestadorFalso
 client = TestClient(api.app)
 
 
@@ -487,11 +558,12 @@ r = client.get("/lineas/guitarra1/plugins")
 cats = r.json()["categorias"]
 ids = [p["id"] for c in cats for p in c["plugins"]]
 check("orden de la leyenda y solo categorias con modelos",
-      [c["id"] for c in cats] == ["overdrive", "modulation", "delay", "reverb"],
+      [c["id"] for c in cats] == ["amp", "overdrive", "modulation", "delay", "reverb"],
       f"-> {[c['id'] for c in cats]}")
 check("12AX7 (variante interna) no aparece", "12AX7" not in ids, f"-> {ids}")
-check("bloques fijos (ampstack, noise_gate) no aparecen: insertarlos tumba al motor",
-      not {"ampstack", "noise_gate"} & set(ids), f"-> {ids}")
+check("los fijos que tumban al motor (noise_gate) no aparecen",
+      "noise_gate" not in ids, f"-> {ids}")
+check("el Amp si: agregarlo = mostrarlo (nunca se inserta en el motor)", "ampstack" in ids, f"-> {ids}")
 check("marca los que ya estan en el rack",
       {p["id"]: p["en_cadena"] for c in cats for p in c["plugins"]}["freeverb"] is True)
 
@@ -518,9 +590,11 @@ r = client.post("/lineas/guitarra1/grid/quitar", json={"unidad": "ts9sim", "este
 check("404 al quitar algo que no esta", r.status_code == 404, f"-> {r.status_code}")
 fake.llamadas.clear()
 r = client.post("/lineas/guitarra1/grid/quitar", json={"unidad": "ampstack", "estereo": False})
-check("400 al quitar ampstack (segfault en el motor real)", r.status_code == 400, f"-> {r.status_code}")
-check("...y no llega a mandarse al motor",
-      not any(c[0] in ("remove", "remove_rack_unit") for c in fake.llamadas), f"-> {fake.llamadas}")
+check("quitar el Amp: 200 y deja de verse", r.status_code == 200
+      and "ampstack" not in [u["id"] for u in r.json()["principal"]], f"-> {r.status_code} {r.text[:200]}")
+check("...pero NUNCA se le pide al motor quitarlo (segfault real): se bypasea",
+      not any(c[0] in ("remove", "remove_rack_unit") and c[1] == "ampstack" for c in fake.llamadas)
+      and fake.valores.get("ampstack.on_off") == 0, f"-> {fake.llamadas}")
 r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "noise_gate", "estereo": False})
 check("404 al insertar un bloque fijo", r.status_code == 404, f"-> {r.status_code}")
 
@@ -613,6 +687,61 @@ r = client.post("/lineas/guitarra1/stomps", json={"unidad": "noexiste", "pie": 1
 check("404 si el bloque no esta en el GRID", r.status_code == 404)
 r = client.post("/lineas/guitarra1/stomps", json={"unidad": "ts9sim", "pie": 9})
 check("400 con pie fuera de A-H", r.status_code == 400, f"-> {r.status_code}")
+
+print("\n27c. Lineas paralelas (como Cortex)")
+reset()
+client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "ts9sim"})
+g = client.get("/lineas/guitarra1/grid").json()
+check("sin paralelo: una fila", [i["id"] for i in g["principal"]] == ["ampstack", "freeverb", "ts9sim"]
+      and g["paralela"] == [] and g["split"] is False, f"-> {g.get('principal')}")
+check("desde el arranque, el instrumento queda cableado al mezclador (sin split)",
+      any(("ps_guitarra1_pre_fx:out_0", "pedalsistema_mixer:guitarra1_L") in p.conexiones
+          for p in OrquestadorFalso.cableados), f"-> {[p.conexiones for p in OrquestadorFalso.cableados][:1]}")
+r = client.post("/lineas/guitarra1/grid/disponer",
+                json={"principal": ["ampstack", "@split", "ts9sim", "@merge", "freeverb"], "paralela": []})
+g = r.json()
+check("soltar el punto crea SPLIT y MERGE", r.status_code == 200
+      and [i["id"] for i in g["principal"]] == ["ampstack", "@split", "a/ts9sim", "@merge", "post/freeverb"]
+      and g["split"] is True, f"-> {r.status_code} {r.text[:300]}")
+check("el SPLIT/MERGE se prende y se re-cablea (con tramo post)",
+      api._ruteo().activos.get("guitarra1") is True
+      and ("ps_merge:guitarra1_mono", "ps_guitarra1_post_amp:in_0") in OrquestadorFalso.cableados[-1].conexiones)
+r = client.get("/lineas/guitarra1/unidad/@merge")
+check("tocar el MERGE abre sus perillas", r.status_code == 200
+      and [p["etiqueta"] for p in r.json()["parametros"]] == ["Level A", "Level B", "Pan A", "Pan B", "Phase B"],
+      f"-> {r.text[:300]}")
+r = client.get("/lineas/guitarra1/unidad/a/ts9sim")
+check("un bloque de la linea A se consulta con su id calificado",
+      r.status_code == 200 and r.json()["parametros"][0]["nombre"] == "a/ts9sim.on_off", f"-> {r.status_code} {r.text[:200]}")
+client.post("/lineas/guitarra1/parametros", json={"pares": {"merge.nivel_b": 0.5, "a/ts9sim.on_off": 0}})
+check("perillas del MERGE van al ruteo; las de la linea A a su motor",
+      api._ruteo().vals["guitarra1"]["merge.nivel_b"] == 0.5
+      and api._linea("guitarra1").rpc.motor("a").valores.get("ts9sim.on_off") == 0)
+client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "chorus", "tramo": "pre"})
+r = client.post("/lineas/guitarra1/grid/insertar", json={"unidad": "chorus", "tramo": "b"})
+check("antes del SPLIT no entra un estereo; en la linea B si",
+      r.status_code == 200 and "b/chorus" in [i["id"] for i in r.json()["paralela"]], f"-> {r.status_code} {r.text[:200]}")
+client.post("/lineas/guitarra1/guardar")
+guardado = json.loads((Path(_DIR_SETLISTS_TEST) / "guitarra1.json").read_text(encoding="utf-8"))
+p0 = guardado["bancos"][0]["presets"][0]
+check("💾 guarda la disposicion y los valores de todas las lineas",
+      p0.get("paralelo", {}).get("split") is True and p0["paralelo"]["tramos"]["b"] == ["chorus"]
+      and p0["parametros"].get("merge.nivel_b") == 0.5 and "a/ts9sim.on_off" in p0["parametros"],
+      f"-> {p0.get('paralelo')} {sorted(p0.get('parametros', {}))[:6]}")
+client.post("/lineas/guitarra1/accion", json={"accion": "preset_en_banco", "parametro": 1})
+g = client.get("/lineas/guitarra1/grid").json()
+check("otro preset (sin paralelo) deshace la linea", g["split"] is False, f"-> {g['split']}")
+client.post("/lineas/guitarra1/accion", json={"accion": "preset_en_banco", "parametro": 0})
+g = client.get("/lineas/guitarra1/grid").json()
+check("volver al preset guardado la reconstruye", g["split"] is True
+      and [i["id"] for i in g["paralela"]] == ["b/chorus"], f"-> {g.get('principal')} {g.get('paralela')}")
+r = client.post("/lineas/guitarra1/grid/disponer",
+                json={"principal": ["ampstack", "b/chorus", "@split", "a/ts9sim", "@merge", "post/freeverb"],
+                      "paralela": []})
+check("400 con un estereo antes del SPLIT", r.status_code == 400 and "mono" in r.json()["detail"], f"-> {r.text[:200]}")
+r = client.post("/lineas/guitarra1/grid/quitar_linea")
+check("quitar la linea", r.status_code == 200 and r.json()["split"] is False
+      and api._ruteo().activos.get("guitarra1") is False, f"-> {r.text[:200]}")
 
 print("\n28. Sincronia: un cambio en una pantalla llega a las demas por /sync")
 with client.websocket_connect("/sync") as ws:

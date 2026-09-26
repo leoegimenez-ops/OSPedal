@@ -62,6 +62,9 @@ class ControladorEscenario:
     _fijas: frozenset[str] | None = field(default=None, repr=False)
     # Problema no fatal del último preset aplicado (p.ej. preset base inexistente en el motor).
     advertencia: str | None = field(default=None, repr=False)
+    # Líneas paralelas (engine/disposicion.GestorLineas). None = un solo motor, como antes: la
+    # API lo arma con el MotorLinea real; las pruebas de un solo motor falso lo dejan en None.
+    lineas: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.setlist.total_presets:
@@ -131,6 +134,10 @@ class ControladorEscenario:
                 self.advertencia = str(exc)
         if incluir_base and preset.cadena:
             self._sincronizar_cadena(preset.cadena)
+        if incluir_base and self.lineas is not None:
+            # Líneas paralelas guardadas (o deshacerlas si este preset no tiene): antes del `set`,
+            # así los parámetros calificados ("a/...", "merge.*") encuentran sus bloques.
+            self.lineas.cargar(preset.paralelo)
         pares = preset.pares_rpc(self.escena_activa)
         # Los stomps pisados en runtime ganan sobre lo que dice el preset.
         valores = dict(zip(pares[::2], pares[1::2]))
@@ -157,8 +164,17 @@ class ControladorEscenario:
         self._aplicar_tempo()
 
     def _aplicar_tempo(self) -> None:
-        unidades = [u for est in CADENAS.values() for u in self.rpc.orden_rack(est)]
-        pares = pares_tempo(unidades, self.tempo_bpm)
+        if self.lineas is not None:
+            # Los delays de todas las líneas siguen el tempo (nombres calificados por tramo).
+            pares: list[Any] = []
+            for tramo in self.lineas.tramos_activos():
+                prefijo = "" if tramo == "pre" else f"{tramo}/"
+                locales = pares_tempo(self.lineas.unidades(tramo), self.tempo_bpm)
+                for nombre, valor in zip(locales[::2], locales[1::2]):
+                    pares += [prefijo + nombre, valor]
+        else:
+            unidades = [u for est in CADENAS.values() for u in self.rpc.orden_rack(est)]
+            pares = pares_tempo(unidades, self.tempo_bpm)
         if pares:
             self.rpc.fijar(*pares)
 
@@ -243,6 +259,8 @@ class ControladorEscenario:
                     if valor is None:
                         continue
                     parametros[nombre] = bool(valor) if tipo == "bool" else valor
+        if self.lineas is not None:
+            parametros.update(self.lineas.capturar_extra())   # líneas A/B/post y SPLIT/MERGE
         return cadena, parametros
 
     def guardar_en_preset(self) -> Preset:
@@ -262,6 +280,8 @@ class ControladorEscenario:
                     parametros[nombre] = preset.parametros[nombre]
         preset.cadena = cadena
         preset.parametros = parametros
+        if self.lineas is not None:
+            preset.paralelo = self.lineas.exportar()
         for stomp in preset.stomps:
             stomp.activo = bool(parametros.get(stomp.parametro, stomp.activo))
         self._stomps = {s.unidad: s.activo for s in preset.stomps}
