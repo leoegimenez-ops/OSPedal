@@ -1088,3 +1088,54 @@ body {
   box-shadow: 0 0 12px rgba(255,197,61,0.6);
 }
 .grid-lineas line.tenue { stroke: #3F3F46; stroke-dasharray: 3 5; }
+
+/* -- SYSTEM (pantalla del propio equipo) --------------------------------------------------------- */
+
+.sistema { height: 100%; display: flex; gap: 14px; padding: 12px; }
+.sistema-menu { flex-shrink: 0; width: 210px; display: flex; flex-direction: column; gap: 4px; }
+.sistema-menu button {
+  text-align: left; padding: 12px 14px; border: none; border-radius: 10px;
+  background: transparent; color: var(--tenue); font-size: 14px; font-weight: 600;
+}
+.sistema-menu button.activo { background: var(--sup2); color: var(--texto); }
+.sistema-cuerpo { flex: 1; min-width: 0; overflow: auto; display: flex; gap: 20px; align-items: flex-start; }
+.sistema-qr { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.sistema-qr img { width: min(300px, 46vh); height: auto; border-radius: 12px; background: #fff; }
+.sistema-url { font-size: 13px; color: var(--texto); font-weight: 600; word-break: break-all; text-align: center; }
+.sistema-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.sistema-urls { display: flex; flex-direction: column; gap: 6px; }
+.sistema-urls button {
+  text-align: left; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--borde);
+  background: var(--sup); display: flex; flex-direction: column; gap: 3px;
+}
+.sistema-urls button.activo { border-color: var(--activo); }
+.sistema-urls small { color: var(--tenue); word-break: break-all; }
+.sistema-ayuda { color: var(--tenue); font-size: 13px; line-height: 1.5; margin: 4px 2px; }
+.sistema-tarjetas { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.tarjeta, .uso {
+  padding: 14px; border-radius: 12px; background: var(--sup); border: 1px solid var(--borde);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.tarjeta span, .uso-cab span { color: var(--tenue); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.tarjeta b { font-size: 18px; }
+.tarjeta small { color: var(--tenue); }
+.uso-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.uso-cab b { font-size: 14px; }
+.uso-barra { height: 8px; border-radius: 4px; background: #26262B; overflow: hidden; }
+.uso-barra i { display: block; height: 100%; background: var(--ok); border-radius: 4px; }
+.uso-barra i.alto { background: var(--error); }
+.sistema-energia { flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.energia {
+  min-height: 110px; padding: 16px; border-radius: 14px; border: 1px solid var(--borde);
+  background: var(--sup); text-align: left; display: flex; flex-direction: column; justify-content: space-between; gap: 8px;
+}
+.energia b { font-size: 17px; }
+.energia small { color: var(--tenue); line-height: 1.4; }
+.energia.peligro b { color: var(--error); }
+.energia.armado { border-color: var(--activo); background: #2A2210; }
+.energia.armado small { color: var(--activo); font-weight: 600; }
+@media (max-width: 760px) {
+  .sistema { flex-direction: column; }
+  .sistema-menu { width: auto; flex-direction: row; overflow-x: auto; }
+  .sistema-cuerpo { flex-direction: column; }
+}

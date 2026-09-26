@@ -743,6 +743,27 @@ r = client.post("/lineas/guitarra1/grid/quitar_linea")
 check("quitar la linea", r.status_code == 200 and r.json()["split"] is False
       and api._ruteo().activos.get("guitarra1") is False, f"-> {r.text[:200]}")
 
+print("\n27d. Sistema (pantalla del OS): solo local, nunca por el tunel")
+r = client.get("/sistema/local")
+check("la pantalla local se reconoce", r.json() == {"local": True}, f"-> {r.json()}")
+r = client.get("/sistema/local", headers={"Cf-Connecting-Ip": "181.1.2.3"})
+check("un pedido que llega por el tunel NO es local", r.json() == {"local": False})
+r = client.post("/sistema/energia", json={"accion": "apagar"}, headers={"Cf-Connecting-Ip": "181.1.2.3"})
+check("apagar desde internet: 403", r.status_code == 403, f"-> {r.status_code}")
+r = client.post("/sistema/energia", json={"accion": "apagar"}, headers={"X-Forwarded-For": "192.168.0.50"})
+check("ni a traves de un proxy de la red: 403", r.status_code == 403)
+r = client.post("/sistema/energia", json={"accion": "apagar"})
+check("desde la pantalla local, en desarrollo: simulado (no apaga la maquina)",
+      r.status_code == 200 and r.json()["simulado"] is True, f"-> {r.text}")
+r = client.post("/sistema/energia", json={"accion": "formatear"})
+check("accion desconocida: 400", r.status_code == 400)
+r = client.get("/sistema/qr", params={"texto": "http://192.168.0.10:8000/app/"})
+check("QR en SVG", r.status_code == 200 and r.headers["content-type"].startswith("image/svg")
+      and "<svg" in r.text, f"-> {r.status_code} {r.text[:60]}")
+r = client.get("/sistema/info")
+check("info del equipo", r.status_code == 200 and {"memoria", "audio", "red", "carga"} <= set(r.json()),
+      f"-> {r.text[:200]}")
+
 print("\n28. Sincronia: un cambio en una pantalla llega a las demas por /sync")
 with client.websocket_connect("/sync") as ws:
     client.post("/lineas/guitarra1/grid/ordenar", headers={"X-Cliente": "tablet"},

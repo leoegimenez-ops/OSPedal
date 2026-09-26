@@ -1,5 +1,7 @@
 fastapi==0.141.1
 uvicorn==0.53.0
+# QR en SVG para conectar dispositivos desde la pantalla del OS (Python puro, sin dependencias).
+segno==1.6.6
 
 # Solo para correr server/test_api.py, no en producción:
 httpx2==2.13.1

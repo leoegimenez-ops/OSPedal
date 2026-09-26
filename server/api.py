@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -240,6 +241,44 @@ def _guardar_setlist(nombre: str) -> None:
     _linea(nombre).setlist.guardar(LINEAS[nombre]["setlist"])
 
 
+def guardar_todo() -> list[str]:
+    """Antes de apagar/reiniciar: escribe a disco la setlist de cada línea abierta con todo lo
+    que ya está en memoria (valores de escena, stomps asignados...). NO captura el estado crudo
+    del motor en los presets: eso pisaría un preset con pruebas que el usuario no quiso guardar."""
+    guardadas = []
+    for nombre, ctrl in list(_controladores.items()):
+        try:
+            ctrl.setlist.guardar(LINEAS[nombre]["setlist"])
+            guardadas.append(nombre)
+        except OSError:
+            pass
+    return guardadas
+
+
+def reiniciar_motores() -> dict:
+    """"Restart audio engines" (pantalla del OS): cierra y vuelve a levantar todos los Guitarix.
+    Las setlists se guardan antes; al volver, cada línea recarga su preset activo."""
+    import subprocess as _sp   # noqa: PLC0415
+
+    guardadas = guardar_todo()
+    activos = {n: (c.banco_activo, c.posicion_activa) for n, c in _controladores.items()}
+    for ctrl in _controladores.values():
+        ctrl.rpc.cerrar()
+    _controladores.clear()
+    _cache_plugins.clear()
+    if LANZAR_MOTORES:
+        _sp.run(["pkill", "-f", "guitarix -N -p "], check=False)
+        time.sleep(1.0)
+    reabiertas = []
+    for nombre, (banco, pos) in activos.items():
+        try:
+            _linea(nombre).cargar(banco, pos)
+            reabiertas.append(nombre)
+        except HTTPException:
+            pass
+    return {"ok": True, "guardadas": guardadas, "reabiertas": reabiertas}
+
+
 def _mixer() -> MezcladorJack:
     global _mezclador
     if _mezclador is None:
@@ -283,6 +322,10 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="PedalSistema", lifespan=lifespan)
+
+from server.sistema import router as _router_sistema   # noqa: E402 -- funciones del OS (pantalla local)
+
+app.include_router(_router_sistema)
 
 
 @app.exception_handler(GuitarixError)
@@ -948,6 +991,8 @@ _sync = _Sincronizador()
 
 def _mensaje_sync(ruta: str) -> dict | None:
     partes = [p for p in ruta.split("/") if p]
+    if partes[:2] == ["sistema", "energia"]:
+        return {"tipo": "linea", "linea": "*"}      # reinicio de motores: todas recargan
     if partes[:1] == ["mezclador"]:
         return {"tipo": "mezcla", "linea": None}
     if len(partes) >= 3 and partes[0] == "lineas":

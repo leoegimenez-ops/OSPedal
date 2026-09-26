@@ -184,6 +184,7 @@ function render() {
   if (estado.tab === "grid") renderGrid();
   else if (estado.tab === "presets") renderPresets();
   else if (estado.tab === "gig") renderGig();
+  else if (estado.tab === "sistema") renderSistema();
   else renderSends();
   renderPanel();
 }
@@ -1559,6 +1560,160 @@ function conectarSync() {
   ws.onclose = () => setTimeout(conectarSync, 2000);
 }
 
+// -- SYSTEM (solo en la pantalla del propio equipo) -------------------------------------------
+//
+// Mismas pantallas que el celular + esta pestaña. El servidor decide si esta pantalla es la
+// local (/sistema/local); desde el túnel o la red la pestaña ni aparece, y aunque alguien llame
+// a los endpoints a mano, el servidor los rechaza (server/sistema.py).
+
+const SECCIONES_SISTEMA = [
+  { id: "conectar", nombre: "Connect a device" },
+  { id: "estado", nombre: "Status" },
+  { id: "energia", nombre: "Power" },
+];
+let tSistema = null;
+
+function renderSistema() {
+  clearTimeout(tSistema);
+  $contenido.innerHTML = "";
+  const seccion = estado.seccionSistema || "conectar";
+  const pantalla = nuevo("div", "sistema");
+  const menu = nuevo("nav", "sistema-menu");
+  for (const s of SECCIONES_SISTEMA) {
+    const b = nuevo("button", s.id === seccion ? "activo" : "", esc(s.nombre));
+    b.addEventListener("click", () => { estado.seccionSistema = s.id; renderSistema(); });
+    menu.appendChild(b);
+  }
+  const cuerpo = nuevo("div", "sistema-cuerpo");
+  pantalla.append(menu, cuerpo);
+  $contenido.appendChild(pantalla);
+  ({ conectar: seccionConectar, estado: seccionEstado, energia: seccionEnergia }[seccion])(cuerpo);
+}
+
+async function infoSistema() {
+  return api("/sistema/info");
+}
+
+async function seccionConectar(cuerpo) {
+  cuerpo.innerHTML = '<div class="mensaje-centro">Loading…</div>';
+  let i;
+  try { i = await infoSistema(); } catch (e) { cuerpo.textContent = e.message; return; }
+  const urls = i.red.map((r) => ({ etiqueta: `${r.interfaz} · same Wi-Fi / network`, url: `http://${r.ip}:${i.puerto}/app/` }));
+  if (i.tunel) urls.push({ etiqueta: "Internet (temporary link)", url: `${i.tunel}/app/` });
+  cuerpo.innerHTML = "";
+  if (!urls.length) {
+    cuerpo.appendChild(nuevo("div", "mensaje-centro", "No network connection. Connect the system to Wi-Fi or a cable (Network)."));
+    return;
+  }
+  const qr = nuevo("div", "sistema-qr");
+  const img = nuevo("img");
+  img.alt = "QR code to connect";
+  const texto = nuevo("div", "sistema-url");
+  qr.append(img, texto);
+  const lista = nuevo("div", "sistema-urls");
+  const mostrar = (u) => {
+    img.src = `/sistema/qr?texto=${encodeURIComponent(u.url)}`;
+    texto.textContent = u.url;
+    for (const b of lista.children) b.classList.toggle("activo", b.dataset.url === u.url);
+  };
+  for (const u of urls) {
+    const b = nuevo("button", "", `<b>${esc(u.etiqueta)}</b><small>${esc(u.url)}</small>`);
+    b.dataset.url = u.url;
+    b.addEventListener("click", () => mostrar(u));
+    lista.appendChild(b);
+  }
+  const ayuda = nuevo("p", "sistema-ayuda",
+    "Point the tablet or phone camera at the code and open the link. On the same Wi-Fi it works without internet.");
+  const col = nuevo("div", "sistema-col");
+  col.append(lista, ayuda);
+  cuerpo.append(qr, col);
+  mostrar(urls[0]);
+}
+
+function barraUso(etiqueta, valor, total, texto) {
+  const pct = total ? Math.min(100, (valor / total) * 100) : 0;
+  const el = nuevo("div", "uso",
+    `<div class="uso-cab"><span>${esc(etiqueta)}</span><b>${esc(texto)}</b></div><div class="uso-barra"><i></i></div>`);
+  const i = el.querySelector("i");
+  i.style.width = `${pct}%`;
+  i.classList.toggle("alto", pct > 85);
+  return el;
+}
+
+async function seccionEstado(cuerpo) {
+  let i;
+  try { i = await infoSistema(); } catch (e) { cuerpo.textContent = e.message; return; }
+  if (estado.tab !== "sistema" || estado.seccionSistema !== "estado") return;
+  cuerpo.innerHTML = "";
+  const grilla = nuevo("div", "sistema-tarjetas");
+  const cpu = i.nucleos ? (i.carga[0] / i.nucleos) * 100 : 0;
+  grilla.appendChild(barraUso("CPU", cpu, 100, `${cpu.toFixed(0)}% · ${i.nucleos} cores`));
+  if (i.memoria) {
+    const usada = i.memoria.total_mb - i.memoria.disponible_mb;
+    grilla.appendChild(barraUso("Memory", usada, i.memoria.total_mb,
+      `${(usada / 1024).toFixed(1)} / ${(i.memoria.total_mb / 1024).toFixed(1)} GB`));
+  }
+  grilla.appendChild(barraUso("Disk", i.disco.total_gb - i.disco.libre_gb, i.disco.total_gb, `${i.disco.libre_gb} GB free`));
+  const a = i.audio;
+  grilla.appendChild(nuevo("div", "tarjeta",
+    `<span>Audio</span><b>${a.jack ? `${a.frecuencia} Hz · ${a.buffer} samples` : "Audio server stopped"}</b>` +
+    `<small>${a.latencia_ms ? `${a.latencia_ms} ms per buffer` : ""}</small>`));
+  grilla.appendChild(nuevo("div", "tarjeta",
+    `<span>Temperature</span><b>${i.temperatura_c !== null ? `${i.temperatura_c.toFixed(0)} °C` : "No sensor"}</b>`));
+  const h = Math.floor((i.encendido_seg || 0) / 3600);
+  grilla.appendChild(nuevo("div", "tarjeta",
+    `<span>System</span><b>${esc(i.equipo)}</b><small>on for ${h} h ${Math.floor(((i.encendido_seg || 0) % 3600) / 60)} min</small>`));
+  cuerpo.appendChild(grilla);
+  tSistema = setTimeout(() => {
+    if (estado.tab === "sistema" && estado.seccionSistema === "estado") seccionEstado(cuerpo);
+  }, 3000);
+}
+
+/* Botones de energía con confirmación en dos toques (sin diálogos del navegador: en la pantalla
+ * del OS no hay dónde mostrarlos cómodos y un toque accidental no debe apagar el show). */
+function botonConfirmado(texto, detalle, clase, accion) {
+  const b = nuevo("button", `energia ${clase}`, `<b>${esc(texto)}</b><small>${esc(detalle)}</small>`);
+  let armado = null;
+  b.addEventListener("click", async () => {
+    if (!armado) {
+      b.classList.add("armado");
+      b.querySelector("small").textContent = "Tap again to confirm";
+      armado = setTimeout(() => {
+        armado = null;
+        b.classList.remove("armado");
+        b.querySelector("small").textContent = detalle;
+      }, 3500);
+      return;
+    }
+    clearTimeout(armado);
+    armado = null;
+    b.classList.remove("armado");
+    b.querySelector("small").textContent = "Working…";
+    try {
+      await accion();
+    } catch (e) {
+      aviso(e.message, true);
+    }
+    b.querySelector("small").textContent = detalle;
+  });
+  return b;
+}
+
+function seccionEnergia(cuerpo) {
+  const pedir = async (accion_) => {
+    const r = await api("/sistema/energia", { accion: accion_ });
+    aviso(r.simulado ? r.mensaje : accion_ === "reiniciar_audio" ? "Audio engines restarted" : "Shutting down…");
+    if (accion_ === "reiniciar_audio") await cargarLinea().then(render).catch(() => {});
+  };
+  const grilla = nuevo("div", "sistema-energia");
+  grilla.append(
+    botonConfirmado("Restart audio engines", "Saves setlists, restarts every engine, reloads the active presets", "", () => pedir("reiniciar_audio")),
+    botonConfirmado("Restart system", "Saves everything and restarts the computer", "", () => pedir("reiniciar")),
+    botonConfirmado("Shut down", "Saves everything and powers off safely", "peligro", () => pedir("apagar")),
+  );
+  cuerpo.appendChild(grilla);
+}
+
 async function iniciar() {
   try {
     estado.lineas = await api("/lineas");
@@ -1571,6 +1726,12 @@ async function iniciar() {
   actualizarMotor();
   setInterval(actualizarMotor, 5000);
   conectarSync();
+  try {
+    if ((await api("/sistema/local")).local) {
+      document.body.classList.add("modo-os");
+      document.querySelector('.tab[data-tab="sistema"]').hidden = false;
+    }
+  } catch (e) { /* sin sistema: es una pantalla remota */ }
 }
 
 iniciar();
