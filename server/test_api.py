@@ -31,6 +31,11 @@ _DIR_SETLISTS_TEST = tempfile.mkdtemp(prefix="setlists_test_")
 os.environ["SETLISTS_DIR"] = _DIR_SETLISTS_TEST
 _DIR_MODELOS_TEST = tempfile.mkdtemp(prefix="modelos_test_")
 os.environ["PS_MODELOS"] = _DIR_MODELOS_TEST
+_DIR_CONFIG_TEST = tempfile.mkdtemp(prefix="config_test_")
+os.environ["PS_CONFIG"] = os.path.join(_DIR_CONFIG_TEST, "equipo.json")
+_FIFO_MIDI = os.path.join(_DIR_CONFIG_TEST, "pedalera_falsa")
+os.mkfifo(_FIFO_MIDI)
+os.environ["PS_MIDI_EXTRA"] = _FIFO_MIDI
 
 import server.api as api  # noqa: E402
 
@@ -849,6 +854,54 @@ r = client.post("/archivos/ir/borrar", json={"nombre": "passwd.wav"}, headers={"
 check("borrar desde otro dispositivo: 403", r.status_code == 403)
 r = client.post("/archivos/ir/borrar", json={"nombre": "passwd.wav"})
 check("borrar desde la pantalla", r.status_code == 200 and not (Path(_DIR_MODELOS_TEST) / "irs" / "passwd.wav").exists())
+
+print("\n27g. Audio y pedalera MIDI (configuracion del equipo)")
+reset()
+r = client.post("/audio/servidor", json={"frecuencia": 48000, "buffer": 128}, headers={"Cf-Connecting-Ip": "1.2.3.4"})
+check("cambiar el audio desde el tunel: 403", r.status_code == 403)
+r = client.post("/audio/servidor", json={"frecuencia": 48000, "buffer": 128})
+check("buffer 128 a 48 kHz = 2.67 ms, guardado", r.status_code == 200 and r.json()["latencia_ms"] == 2.67
+      and json.loads(Path(os.environ["PS_CONFIG"]).read_text())["audio"]["buffer"] == 128, f"-> {r.text}")
+r = client.post("/audio/servidor", json={"frecuencia": 47000, "buffer": 128})
+check("frecuencia invalida: 400", r.status_code == 400)
+r = client.post("/audio/entradas", json={"linea": "guitarra1", "puerto": "no:existe"})
+check("entrada fisica inexistente: 400", r.status_code == 400)
+r = client.get("/audio/estado")
+check("estado de audio", r.status_code == 200 and {"jack", "fisicos", "lineas", "buses", "config"} <= set(r.json()),
+      f"-> {r.text[:200]}")
+
+r = client.get("/midi/estado")
+check("la pedalera de prueba aparece en la lista",
+      any(d["ruta"] == _FIFO_MIDI for d in r.json()["dispositivos"]), f"-> {r.json()['dispositivos']}")
+check("mapa por defecto (el de ejemplo): CC 80 -> Preset A",
+      any(a["disparador"] == "CC 80" and a["texto"] == "Preset A" for a in r.json()["asignaciones"]),
+      f"-> {r.json()['asignaciones'][:3]}")
+r = client.post("/midi/config", json={"dispositivo": _FIFO_MIDI, "linea": "guitarra1"})
+check("elegir pedalera e instrumento", r.status_code == 200)
+ctrl1 = api._linea("guitarra1")
+ctrl1.ejecutar(api.Accion.PRESET_EN_BANCO, 1)
+_escritor = os.open(_FIFO_MIDI, os.O_WRONLY)
+time.sleep(0.3)
+os.write(_escritor, bytes([0xB0, 80, 127, 0xB0, 80, 0]))       # pisar y soltar el pie CC 80
+time.sleep(0.6)
+check("pisar CC 80 en la pedalera carga el Preset A del instrumento elegido",
+      ctrl1.posicion_activa == 0, f"-> posicion {ctrl1.posicion_activa}")
+e = client.get("/midi/estado").json()
+check("monitor: ultimo mensaje recibido y pedalera conectada",
+      e["conectado"] and e["ultimo"]["numero"] == 80 and e["ultimo"]["tipo"] == "control_change", f"-> {e['ultimo']}")
+r = client.post("/midi/aprender", json={"accion": "toggle_stomp", "parametro": 2})
+check("Learn: esperando un pie", r.status_code == 200 and client.get("/midi/estado").json()["aprendiendo"]["texto"] == "Stomp C")
+os.write(_escritor, bytes([0xB1, 90, 127]))                      # CC 90 por el canal 2
+time.sleep(0.6)
+e = client.get("/midi/estado").json()
+check("Learn: el pie pisado queda asignado a Stomp C (y guardado)",
+      e["aprendiendo"] is None and any(a["disparador"] == "CC 90 · ch 2" and a["texto"] == "Stomp C" for a in e["asignaciones"])
+      and "90" in Path(os.environ["PS_CONFIG"]).with_name("mapa-midi.json").read_text(), f"-> {e['asignaciones'][-2:]}")
+r = client.post("/midi/olvidar", json={"tipo": "control_change", "numero": 90, "canal": 2})
+check("olvidar una asignacion", r.status_code == 200
+      and not any(a["disparador"] == "CC 90 · ch 2" for a in client.get("/midi/estado").json()["asignaciones"]))
+os.close(_escritor)
+api.equipo.detener_midi()
 
 print("\n28. Sincronia: un cambio en una pantalla llega a las demas por /sync")
 with client.websocket_connect("/sync") as ws:

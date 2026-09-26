@@ -1215,3 +1215,30 @@ body {
 .energia.mini b { font-size: 12px; }
 .energia.mini small { font-size: 10.5px; }
 .energia.mini small:empty { display: none; }
+
+/* -- SYSTEM > Audio / MIDI ----------------------------------------------------------------------- */
+
+.confs { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.conf { border: 1px solid var(--borde); border-radius: 14px; background: #0E0E10; overflow: hidden; }
+.conf-cab { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; border-bottom: 1px solid var(--borde); }
+.conf-cab b { font-size: 14px; }
+.conf-cab small { color: var(--tenue); font-size: 12px; }
+.conf-fila { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px; border-bottom: 1px solid #19191D; }
+.conf-fila:last-child { border-bottom: none; }
+.conf-fila > span { font-size: 13px; color: #D4D4D8; }
+.conf-ctrl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.conf-ctrl .modal-select { min-width: 190px; max-width: 320px; }
+.conf-ctrl .pildora { flex: 0 0 auto; padding: 0 14px; }
+.conf-latencia { font-size: 12px; color: var(--activo); font-weight: 600; }
+.midi-vivo { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 11px 14px; background: #121215; }
+.midi-vivo .punto-estado { position: static; }
+.midi-vivo b { font-size: 13px; }
+.midi-vivo small { color: var(--tenue); font-size: 12px; font-variant-numeric: tabular-nums; }
+.midi-vivo em { flex-basis: 100%; font-style: normal; color: var(--activo); font-size: 13px; font-weight: 600; }
+.midi-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.midi-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 7px;
+  border: 1px solid var(--borde); background: var(--sup2); font-size: 12px; font-weight: 600;
+}
+.midi-chip i { font-style: normal; color: var(--tenue); }
+.pildora.aprendiendo { background: var(--activo); color: #000; border-color: var(--activo); animation: parpadeo 1s steps(1) infinite; }

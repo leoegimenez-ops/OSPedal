@@ -5,6 +5,8 @@ models/irs/*
 !models/nam/.gitkeep
 !models/aidax/.gitkeep
 !models/irs/.gitkeep
+# Configuración de ESTE equipo (interfaz, entradas, pedalera, mapa MIDI): server/config_equipo.py
+config/
 # Carpetas-enlace de las capturas NAM/AIDA-X cargadas en los bloques (server/archivos.py)
 models/.cargados/
 

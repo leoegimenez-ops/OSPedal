@@ -226,6 +226,7 @@ def _linea(nombre: str) -> ControladorEscenario:
         ctrl.lineas = GestorLineas(motor, lambda s, p, _n=nombre: _recablear(_n, s, p))
         _controladores[nombre] = ctrl
         _recablear(nombre, False, False)      # desde el arranque: instrumento → motor → mezclador
+        equipo.aplicar_entrada(nombre)        # la entrada física elegida en SYSTEM > Audio
     return _controladores[nombre]
 
 
@@ -291,6 +292,8 @@ def _mixer() -> MezcladorJack:
         except ErrorDeMezclador as exc:
             raise HTTPException(503, f"No se pudo iniciar el mezclador: {exc}")
         _mezclador = m
+        for bus in BUSES_MIXER:
+            equipo.aplicar_salidas(bus)       # las salidas físicas elegidas en SYSTEM > Audio
     return _mezclador
 
 
@@ -308,9 +311,23 @@ def _motor() -> GuitarixRPC:
     return _gx
 
 
+_loop: asyncio.AbstractEventLoop | None = None
+
+
+def publicar_desde_hilo(mensaje: dict) -> None:
+    """Avisar a las pantallas (/sync) desde otro hilo -- p. ej. la pedalera MIDI, que no pasa
+    por HTTP. Las colas de asyncio no son seguras entre hilos: se entra por el loop."""
+    if _loop is not None:
+        _loop.call_soon_threadsafe(_sync.publicar, mensaje)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global _loop
+    _loop = asyncio.get_running_loop()
+    equipo.iniciar_midi()            # la pedalera configurada, desde el arranque
     yield
+    equipo.detener_midi()
     if _gx is not None:
         _gx.cerrar()
     if _mezclador is not None:
@@ -324,11 +341,13 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="PedalSistema", lifespan=lifespan)
 
 from server import archivos                               # noqa: E402 -- IR / NAM / AIDA-X
+from server import equipo                                 # noqa: E402 -- audio y pedalera MIDI
 from server.sistema import exigir_local                 # noqa: E402
 from server.sistema import router as _router_sistema   # noqa: E402 -- funciones del OS (pantalla local)
 
 app.include_router(_router_sistema)
 app.include_router(archivos.router)
+app.include_router(equipo.router)
 
 
 @app.exception_handler(GuitarixError)

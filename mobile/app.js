@@ -1769,6 +1769,8 @@ async function guardarPresetNuevo(banco) {
 
 const SECCIONES_SISTEMA = [
   { id: "conectar", nombre: "Connect a device" },
+  { id: "audio", nombre: "Audio" },
+  { id: "midi", nombre: "MIDI pedalboard" },
   { id: "archivos", nombre: "Files (IR / captures)" },
   { id: "estado", nombre: "Status" },
   { id: "energia", nombre: "Power" },
@@ -1789,7 +1791,174 @@ function renderSistema() {
   const cuerpo = nuevo("div", "sistema-cuerpo");
   pantalla.append(menu, cuerpo);
   $contenido.appendChild(pantalla);
-  ({ conectar: seccionConectar, archivos: seccionArchivos, estado: seccionEstado, energia: seccionEnergia }[seccion])(cuerpo);
+  ({ conectar: seccionConectar, audio: seccionAudio, midi: seccionMidi, archivos: seccionArchivos,
+    estado: seccionEstado, energia: seccionEnergia }[seccion])(cuerpo);
+}
+
+function selector(opciones, valor, alCambiar) {
+  const s = nuevo("select", "modal-select");
+  for (const o of opciones) {
+    const op = nuevo("option", "", esc(o.texto));
+    op.value = o.valor ?? "";
+    op.selected = (o.valor ?? "") === (valor ?? "");
+    s.appendChild(op);
+  }
+  s.addEventListener("change", () => alCambiar(s.value || null));
+  return s;
+}
+
+function tarjetaConfig(titulo, ayuda) {
+  const t = nuevo("section", "conf");
+  t.appendChild(nuevo("div", "conf-cab", `<b>${esc(titulo)}</b>${ayuda ? `<small>${esc(ayuda)}</small>` : ""}`));
+  return t;
+}
+
+function filaConfig(etiqueta, ...controles) {
+  const f = nuevo("div", "conf-fila", `<span>${esc(etiqueta)}</span>`);
+  const der = nuevo("div", "conf-ctrl");
+  for (const c of controles) der.appendChild(c);
+  f.appendChild(der);
+  return f;
+}
+
+async function seccionAudio(cuerpo) {
+  let a;
+  try { a = await api("/audio/estado"); } catch (e) { cuerpo.textContent = e.message; return; }
+  cuerpo.innerHTML = "";
+  const col = nuevo("div", "confs");
+  const guardar = async (ruta, datos, ok) => {
+    try { const r = await api(ruta, datos); aviso(ok(r)); } catch (e) { aviso(e.message, true); }
+  };
+
+  // Servidor de audio
+  const srv = tarjetaConfig("Audio server",
+    a.jack.activo ? `Running now: ${a.jack.frecuencia} Hz · ${a.jack.buffer} samples · ${a.jack.latencia_ms} ms per buffer` : "Not running");
+  const cfg = { ...a.config.audio };
+  const lat = nuevo("b", "conf-latencia");
+  const pintarLat = () => { lat.textContent = `≈ ${(cfg.buffer / cfg.frecuencia * 1000).toFixed(2)} ms per buffer`; };
+  srv.appendChild(filaConfig("Interface",
+    selector([{ valor: null, texto: "System default" }, ...a.interfaces.map((i) => ({ valor: i.id, texto: i.nombre }))],
+      cfg.dispositivo, (v) => { cfg.dispositivo = v; })));
+  srv.appendChild(filaConfig("Sample rate",
+    selector([44100, 48000, 88200, 96000].map((f) => ({ valor: String(f), texto: `${f} Hz` })), String(cfg.frecuencia),
+      (v) => { cfg.frecuencia = Number(v); pintarLat(); })));
+  srv.appendChild(filaConfig("Buffer (latency)",
+    selector([32, 64, 128, 256, 512, 1024].map((b) => ({ valor: String(b), texto: `${b} samples` })), String(cfg.buffer),
+      (v) => { cfg.buffer = Number(v); pintarLat(); }), lat));
+  const aplicar = nuevo("button", "pildora on", "SAVE");
+  aplicar.addEventListener("click", () => guardar("/audio/servidor", cfg, (r) => r.aplicar));
+  srv.appendChild(filaConfig("Lower buffer = less latency, more CPU. If you hear clicks, raise it.", aplicar));
+  pintarLat();
+  col.appendChild(srv);
+
+  // Entradas
+  const ent = tarjetaConfig("Inputs", "Which physical input feeds each instrument");
+  for (const l of a.lineas) {
+    ent.appendChild(filaConfig(etiquetaLinea(l),
+      selector([{ valor: null, texto: "— none —" }, ...a.fisicos.entradas.map((p) => ({ valor: p, texto: p }))],
+        a.config.entradas[l], (v) => guardar("/audio/entradas", { linea: l, puerto: v }, () => `${etiquetaLinea(l)} input saved`))));
+  }
+  col.appendChild(ent);
+
+  // Salidas
+  const sal = tarjetaConfig("Outputs", "Where each mix goes (monitors, PA)");
+  for (const b of a.buses) {
+    const elegido = a.config.salidas[b.id] || {};
+    const canales = b.modo === "estereo" ? ["L", "R"] : ["mono"];
+    const actual = { ...elegido };
+    const ctrls = canales.map((c) => selector(
+      [{ valor: null, texto: c === "mono" ? "— none —" : `${c}: none` },
+        ...a.fisicos.salidas.map((p) => ({ valor: p, texto: c === "mono" ? p : `${c}: ${p}` }))],
+      elegido[c], (v) => {
+        actual[c] = v;
+        guardar("/audio/salidas", { bus: b.id, puertos: actual }, () => `${etiquetaBus(b.id)} outputs saved`);
+      }));
+    sal.appendChild(filaConfig(`${etiquetaBus(b.id)} · ${b.modo === "estereo" ? "stereo" : "mono"}`, ...ctrls));
+  }
+  col.appendChild(sal);
+  cuerpo.appendChild(col);
+}
+
+const TIPO_MIDI_CORTO = { control_change: "CC", note_on: "Note", note_off: "Note", program_change: "PC" };
+
+async function seccionMidi(cuerpo) {
+  clearTimeout(tSistema);
+  let m;
+  try { m = await api("/midi/estado"); } catch (e) { cuerpo.textContent = e.message; return; }
+  if (estado.tab !== "sistema" || estado.seccionSistema !== "midi") return;
+  const refrescar = () => seccionMidi(cuerpo);
+  // Si ya está dibujado, solo actualizar las partes vivas (monitor, "Learn") sin perder el scroll.
+  const vivo = cuerpo.querySelector(".midi-vivo");
+  if (vivo && cuerpo.dataset.firma === JSON.stringify([m.config, m.asignaciones, !!m.aprendiendo])) {
+    pintarMidiVivo(vivo, m);
+    tSistema = setTimeout(refrescar, 700);
+    return;
+  }
+  cuerpo.dataset.firma = JSON.stringify([m.config, m.asignaciones, !!m.aprendiendo]);
+  cuerpo.innerHTML = "";
+  const col = nuevo("div", "confs");
+  const cab = tarjetaConfig("Pedalboard", "Any class-compliant USB MIDI pedalboard");
+  const cfg = { ...m.config };
+  const guardar = async () => {
+    try { await api("/midi/config", cfg); aviso("Pedalboard saved"); } catch (e) { aviso(e.message, true); }
+    refrescar();
+  };
+  cab.appendChild(filaConfig("Device",
+    selector([{ valor: null, texto: m.dispositivos.length ? "— none —" : "No MIDI device found" },
+      ...m.dispositivos.map((d) => ({ valor: d.ruta, texto: `${d.nombre} (${d.id})` }))],
+    cfg.dispositivo, (v) => { cfg.dispositivo = v; guardar(); })));
+  cab.appendChild(filaConfig("Controls",
+    selector(m.lineas.map((l) => ({ valor: l, texto: etiquetaLinea(l) })), cfg.linea || m.lineas[0],
+      (v) => { cfg.linea = v; guardar(); })));
+  const vivoEl = nuevo("div", "midi-vivo");
+  cab.appendChild(vivoEl);
+  col.appendChild(cab);
+
+  const asig = tarjetaConfig("Footswitches", "Tap Learn, then press the footswitch you want for that action");
+  const porAccion = {};
+  for (const a of m.asignaciones) {
+    const k = `${a.accion}:${a.parametro ?? ""}`;
+    (porAccion[k] = porAccion[k] || []).push(a);
+  }
+  for (const acc of m.acciones) {
+    const k = `${acc.accion}:${acc.parametro ?? ""}`;
+    const chips = nuevo("div", "midi-chips");
+    for (const a of porAccion[k] || []) {
+      const chip = nuevo("button", "midi-chip", `${esc(a.disparador)} <i>×</i>`);
+      chip.title = "Forget this footswitch";
+      chip.addEventListener("click", async () => {
+        try { await api("/midi/olvidar", { tipo: a.tipo, numero: a.numero, canal: a.canal }); } catch (e) { aviso(e.message, true); }
+        refrescar();
+      });
+      chips.appendChild(chip);
+    }
+    const aprendiendoEsta = m.aprendiendo && m.aprendiendo.accion === acc.accion && m.aprendiendo.parametro === acc.parametro;
+    const btn = nuevo("button", "pildora" + (aprendiendoEsta ? " aprendiendo" : ""), aprendiendoEsta ? "PRESS A FOOTSWITCH…" : "LEARN");
+    btn.addEventListener("click", async () => {
+      try {
+        await api(aprendiendoEsta ? "/midi/cancelar" : "/midi/aprender",
+          aprendiendoEsta ? {} : { accion: acc.accion, parametro: acc.parametro });
+      } catch (e) { aviso(e.message, true); }
+      refrescar();
+    });
+    asig.appendChild(filaConfig(acc.texto, chips, btn));
+  }
+  col.appendChild(asig);
+  cuerpo.appendChild(col);
+  pintarMidiVivo(vivoEl, m);
+  tSistema = setTimeout(refrescar, 700);
+}
+
+function pintarMidiVivo(el, m) {
+  const u = m.ultimo;
+  const hace = u ? Math.max(0, Math.round(Date.now() / 1000 - u.cuando)) : null;
+  const estadoTxt = !m.config.dispositivo ? "No pedalboard selected"
+    : m.conectado ? "Connected" : (m.error || "Connecting…");
+  el.innerHTML =
+    `<span class="punto-estado ${m.conectado ? "ok" : m.config.dispositivo ? "error" : ""}"></span>` +
+    `<b>${esc(estadoTxt)}</b>` +
+    `<small>${u ? `Last: ${TIPO_MIDI_CORTO[u.tipo] || u.tipo} ${u.numero} = ${u.valor} · ch ${u.canal} · ${hace}s ago` : "Waiting for a message…"}</small>` +
+    (m.aprendiendo ? `<em>Learning “${esc(m.aprendiendo.texto)}”: press a footswitch (${m.aprendiendo.segundos}s)</em>` : "");
 }
 
 const ACEPTA_ARCHIVO = { ir: ".wav,.flac,.aif,.aiff", nam: ".nam", aidax: ".json,.aidax" };
