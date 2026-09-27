@@ -1,0 +1,6 @@
+# El sistema corre en Linux: los scripts y archivos del OS siempre con finales de línea LF, aunque
+# el repo se baje en Windows (con CRLF, "#!/bin/bash\r" no arranca y systemd/polkit fallan).
+os/** text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.service text eol=lf
