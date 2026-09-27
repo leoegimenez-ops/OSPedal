@@ -32,6 +32,9 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
   apt-get update
 fi
+# Guitarix pide "libjack-dev | libjack-jackd2-dev" y apt elige la primera: JACK1, que DESINSTALA
+# jackd2 (el servidor de audio del equipo). Con la de JACK2 ya puesta, la condición está cumplida.
+apt-get install -y --no-install-recommends libjack-jackd2-dev
 apt-get build-dep -y guitarix
 
 mkdir -p "$ESTADO_DIR" /usr/local/src

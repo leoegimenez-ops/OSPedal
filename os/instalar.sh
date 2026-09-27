@@ -106,6 +106,21 @@ paso "6/6 Nombre en la red"
 hostnamectl set-hostname pedalsistema 2>/dev/null || echo pedalsistema > /etc/hostname
 grep -q 'pedalsistema' /etc/hosts || echo "127.0.1.1 pedalsistema" >> /etc/hosts
 
+paso "Verificando"
+# Lo imprescindible para que el equipo suene. Mejor fallar acá con un mensaje claro que en el
+# escenario con un servicio reiniciándose sin parar (pasó: la compilación del motor desinstaló jackd2).
+faltan=()
+for c in jackd guitarix; do command -v "$c" >/dev/null || faltan+=("$c"); done
+[ "$PANTALLA" = 1 ] && for c in cage chromium; do command -v "$c" >/dev/null || faltan+=("$c"); done
+[ -x "$DESTINO/.venv/bin/uvicorn" ] || faltan+=("$DESTINO/.venv/bin/uvicorn")
+runuser -u "$USUARIO" -- "$DESTINO/.venv/bin/python" -c "import numpy, jack, fastapi" 2>/dev/null ||
+  faltan+=("módulos de Python (numpy, jack, fastapi)")
+if [ "${#faltan[@]}" -gt 0 ]; then
+  echo "FALTA: ${faltan[*]}" >&2
+  exit 1
+fi
+echo "OK: jackd, motor, app$([ "$PANTALLA" = 1 ] && echo ", pantalla")"
+
 echo
 echo "Listo. Reiniciá el equipo: arranca solo en la app."
 echo "Desde la tablet o el celular (misma red): http://pedalsistema.local:8000/app/"
