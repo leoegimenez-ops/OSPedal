@@ -13,6 +13,9 @@ User=pedal
 # cage: compositor Wayland que muestra UNA sola app a pantalla completa (táctil y mouse).
 # -d: sin decoraciones. Si el navegador se cierra, cage termina y systemd lo vuelve a abrir.
 ExecStart=/usr/bin/cage -d -- /opt/pedalsistema/os/bin/kiosk.sh
+# Sin placa de video con driver (PC muy vieja, máquina virtual), cage se niega a dibujar por
+# software. Con esto lo hace; si hay aceleración, no cambia nada.
+Environment=WLR_RENDERER_ALLOW_SOFTWARE=1
 Restart=always
 RestartSec=2
 UtmpIdentifier=tty1

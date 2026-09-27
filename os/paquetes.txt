@@ -1,6 +1,9 @@
 # Paquetes de Debian que necesita PedalSistema (uno por línea; # = comentario).
 # Los usan os/instalar.sh y, al actualizar, os/post-actualizacion.sh (instala los que falten).
 jackd2
+# jack_lsp, jack_samplerate, jack_bufsize (los usa engine/audio_engine.py). En Debian 13 es solo
+# una recomendación de jackd2 y el instalador no instala recomendaciones.
+jack-example-tools
 alsa-utils
 python3-venv
 python3-pip

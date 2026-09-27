@@ -7,6 +7,8 @@
 # - nice 10: la pantalla nunca le gana CPU al audio (docs/arquitectura.md: "la GUI no interfiere
 #   con el audio").
 # - Perfil propio del navegador en ~/.kiosk: sin "restaurar sesión", sin traducir, sin pellizcar.
+# - Sin tráfico de fondo a Google (mensajería, componentes, sincronización): en un escenario no
+#   sirve y le saca CPU y red al equipo.
 
 URL="${PS_URL:-http://127.0.0.1:8000/app/}"
 for _ in $(seq 1 120); do
@@ -26,4 +28,8 @@ exec nice -n 10 chromium \
   --disable-pinch \
   --overscroll-history-navigation=0 \
   --touch-events=enabled \
-  --check-for-update-interval=31536000
+  --check-for-update-interval=31536000 \
+  --disable-background-networking \
+  --disable-component-update \
+  --disable-sync \
+  --password-store=basic

@@ -110,7 +110,7 @@ paso "Verificando"
 # Lo imprescindible para que el equipo suene. Mejor fallar acá con un mensaje claro que en el
 # escenario con un servicio reiniciándose sin parar (pasó: la compilación del motor desinstaló jackd2).
 faltan=()
-for c in jackd guitarix; do command -v "$c" >/dev/null || faltan+=("$c"); done
+for c in jackd jack_lsp jack_samplerate guitarix; do command -v "$c" >/dev/null || faltan+=("$c"); done
 [ "$PANTALLA" = 1 ] && for c in cage chromium; do command -v "$c" >/dev/null || faltan+=("$c"); done
 [ -x "$DESTINO/.venv/bin/uvicorn" ] || faltan+=("$DESTINO/.venv/bin/uvicorn")
 runuser -u "$USUARIO" -- "$DESTINO/.venv/bin/python" -c "import numpy, jack, fastapi" 2>/dev/null ||
