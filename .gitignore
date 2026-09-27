@@ -22,6 +22,8 @@ venv/
 # Build / ISO
 os/build/
 *.iso
+# Imagen USB armada con os/imagen/armar-imagen
+imagen-usb/
 
 # Editor
 .vscode/

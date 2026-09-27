@@ -1,0 +1,87 @@
+#!/bin/bash
+# Arma la imagen booteable de PedalSistema: una ISO híbrida que se graba en un pendrive y arranca
+# en PCs con BIOS o UEFI, directo en la app.
+#
+#   sudo os/imagen/armar-imagen [carpeta-salida]      # default: imagen-usb/ en la raíz del repo
+#
+# Corre en Debian 13 (o WSL2 con Debian 13) con live-build instalado. La primera vez tarda
+# ~40 min (baja Debian y compila el motor); después reusa los paquetes bajados.
+# Usa el ÚLTIMO COMMIT del repo, no los cambios sin guardar: la imagen es siempre una versión
+# identificable, y el equipo la puede actualizar y volver atrás (SYSTEM > Update).
+#
+# Adentro corre os/instalar.sh --motor-generico: es el mismo sistema que una instalación a mano,
+# con el motor compilado para cualquier PC x86-64 (la imagen se arma en otra PC).
+set -euo pipefail
+AQUI="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$AQUI/../.." && pwd)"
+TRABAJO="${PS_TRABAJO_IMAGEN:-/var/tmp/pedalsistema-imagen}"
+SALIDA="${1:-$REPO/imagen-usb}"
+[ "$(id -u)" = 0 ] || { echo "Correr como administrador: sudo $0" >&2; exit 1; }
+command -v lb >/dev/null || { echo "Falta live-build: sudo apt install live-build" >&2; exit 1; }
+git_repo() { git -c safe.directory='*' -C "$REPO" "$@"; }
+VERSION="$(git_repo describe --tags --always)"
+[ -z "$(git_repo status --porcelain --untracked-files=no)" ] ||
+  echo "Aviso: hay cambios sin commitear; la imagen usa el último commit ($VERSION)."
+paso() { echo; echo "==> $*"; }
+
+paso "Preparando $TRABAJO (versión $VERSION)"
+mkdir -p "$TRABAJO"
+cd "$TRABAJO"
+# Limpia lo armado antes, pero conserva cache/ (los paquetes ya bajados).
+[ -d config ] && lb clean >/dev/null 2>&1 || true
+rm -rf config
+
+# Opciones de arranque:
+#   persistence   guarda presets, configuración y actualizaciones en la partición "persistence"
+#                 del pendrive (la crea Rufus); sin ella el equipo arranca igual, pero olvida todo.
+#   threadirqs preempt=full   kernel más reactivo: menos cortes de audio a latencias bajas.
+#   live-config.nocomponents  sin el usuario "user" de las imágenes live: el equipo tiene "pedal".
+ARRANQUE="boot=live components persistence quiet hostname=pedalsistema
+ locales=es_AR.UTF-8 keyboard-layouts=latam timezone=America/Argentina/Buenos_Aires
+ live-config.nocomponents=user-setup,sudo,login threadirqs preempt=full"
+
+lb config \
+  --distribution trixie \
+  --architectures amd64 --linux-flavours amd64 \
+  --archive-areas "main contrib non-free-firmware" \
+  --binary-images iso-hybrid \
+  --bootloaders "grub-efi,syslinux" \
+  --debian-installer none \
+  --apt-recommends false \
+  --firmware-chroot true \
+  --memtest none \
+  --iso-application PedalSistema \
+  --iso-volume "PedalSistema" \
+  --bootappend-live "$(echo $ARRANQUE)" \
+  >/dev/null
+
+# Paquetes base del sistema live (los de PedalSistema los instala os/instalar.sh).
+cat > config/package-lists/pedalsistema.list.chroot <<'EOF'
+live-boot
+live-config
+live-config-systemd
+systemd-sysv
+locales
+keyboard-configuration
+console-setup
+tzdata
+ca-certificates
+EOF
+
+# El programa, con su historial de git (lo necesita SYSTEM > Update).
+mkdir -p config/includes.chroot/usr/local/src
+git -c safe.directory='*' clone --quiet --no-hardlinks "$REPO" config/includes.chroot/usr/local/src/pedalsistema
+
+install -m 755 "$AQUI/instalar-en-imagen.hook.chroot" config/hooks/normal/9000-pedalsistema.hook.chroot
+
+paso "Armando la imagen (lb build)"
+lb build 2>&1 | tee "$TRABAJO/build.log" | grep -E '^(P:|E:|==>)|motor:|Listo' || true
+ISO="$(ls -t "$TRABAJO"/*.iso 2>/dev/null | head -1 || true)"
+[ -n "$ISO" ] || { echo "Falló: ver $TRABAJO/build.log" >&2; tail -30 "$TRABAJO/build.log" >&2; exit 1; }
+
+mkdir -p "$SALIDA"
+DESTINO="$SALIDA/PedalSistema-$VERSION.iso"
+cp "$ISO" "$DESTINO"
+(cd "$SALIDA" && sha256sum "$(basename "$DESTINO")" > "$(basename "$DESTINO").sha256")
+echo
+echo "Listo: $DESTINO ($(du -h "$DESTINO" | cut -f1))"

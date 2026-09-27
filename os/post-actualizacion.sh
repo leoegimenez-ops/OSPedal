@@ -11,7 +11,6 @@
 set -euo pipefail
 RAIZ="${PS_RAIZ:-/opt/pedalsistema}"
 ESTADO_DIR=/var/lib/pedalsistema
-REPO_MOTOR=https://github.com/egimenez-bot/arquitec-dsp.git
 mkdir -p "$ESTADO_DIR"
 
 # 1. Servicios y configuración del sistema
@@ -53,15 +52,7 @@ if [ -f "$ESTADO_DIR/motor-debian" ]; then
   echo "motor: Guitarix de Debian (no se compila)"
 elif [ "$pedido" != "$instalado" ]; then
   echo "motor: compilando Arquitec DSP $pedido (antes: ${instalado:-ninguno})"
-  mkdir -p /usr/local/src
-  [ -d /usr/local/src/arquitec-dsp/.git ] || git clone "$REPO_MOTOR" /usr/local/src/arquitec-dsp
-  cd /usr/local/src/arquitec-dsp
-  git fetch --quiet origin
-  git checkout --quiet --detach "$pedido"
-  cd trunk
-  ./waf configure --prefix=/usr --includeresampler --includeconvolver --optimization
-  ./waf build -j"$(nproc)"
-  ./waf install
-  echo "$pedido" > "$ESTADO_DIR/motor-version"
+  # En el propio equipo: optimizado para su procesador.
+  PS_RAIZ="$RAIZ" "$RAIZ/os/bin/compilar-motor"
 fi
 echo "post-actualización: listo"

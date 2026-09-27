@@ -1,0 +1,47 @@
+#!/bin/bash
+# Compila e instala Arquitec DSP (fork de Guitarix) en la versión que pide os/MOTOR_VERSION.
+# Lo usan os/instalar.sh y os/post-actualizacion.sh: una sola forma de compilar el motor.
+#
+#   compilar-motor              # optimizado para ESTE procesador (se compila en el propio equipo)
+#   compilar-motor --generico   # corre en cualquier PC x86-64: para la imagen USB, que se arma en
+#                               # otra PC (optimizado en una con AVX2, no arrancaría en una sin)
+#
+# PS_RAIZ: dónde está el programa (default /opt/pedalsistema).
+set -euo pipefail
+RAIZ="${PS_RAIZ:-/opt/pedalsistema}"
+ESTADO_DIR=/var/lib/pedalsistema
+FUENTES=/usr/local/src/arquitec-dsp
+REPO_MOTOR=https://github.com/egimenez-bot/arquitec-dsp.git
+OPT=(--optimization)
+[ "${1:-}" = --generico ] && OPT=()
+pedido="$(tr -d '[:space:]' < "$RAIZ/os/MOTOR_VERSION")"
+export DEBIAN_FRONTEND=noninteractive
+
+# Dependencias de compilación: salen de las fuentes (deb-src) de Debian.
+if ! apt-get build-dep -s guitarix >/dev/null 2>&1; then
+  cat > /etc/apt/sources.list.d/pedalsistema-fuentes.sources <<EOF
+Types: deb-src
+URIs: http://deb.debian.org/debian
+Suites: $(. /etc/os-release; echo "$VERSION_CODENAME")
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+  apt-get update
+fi
+apt-get build-dep -y guitarix
+
+mkdir -p "$ESTADO_DIR" /usr/local/src
+[ -d "$FUENTES/.git" ] || git clone "$REPO_MOTOR" "$FUENTES"
+git -C "$FUENTES" fetch --quiet origin
+git -C "$FUENTES" checkout --quiet --detach "$pedido"
+cd "$FUENTES/trunk"
+./waf configure --prefix=/usr --includeresampler --includeconvolver "${OPT[@]}"
+./waf build -j"$(nproc)"
+./waf install
+echo "$pedido" > "$ESTADO_DIR/motor-version"
+if [ "${#OPT[@]}" = 0 ]; then
+  touch "$ESTADO_DIR/motor-generico"
+else
+  rm -f "$ESTADO_DIR/motor-generico"
+fi
+echo "motor: Arquitec DSP $pedido instalado (${OPT[*]:-genérico x86-64})"

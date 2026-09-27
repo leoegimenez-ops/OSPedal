@@ -1,0 +1,9 @@
+#!/bin/bash
+# Corre ADENTRO de la imagen mientras se arma (live-build): instala PedalSistema igual que en un
+# equipo, con el motor genérico, y limpia lo que no hace falta llevar en el pendrive.
+set -euo pipefail
+/usr/local/src/pedalsistema/os/instalar.sh --motor-generico
+rm -rf /usr/local/src/pedalsistema               # ya quedó copiado en /opt/pedalsistema
+rm -rf /usr/local/src/arquitec-dsp/trunk/build   # objetos de compilación (se regeneran al actualizar)
+runuser -u pedal -- /opt/pedalsistema/.venv/bin/pip cache purge >/dev/null 2>&1 || true
+apt-get clean

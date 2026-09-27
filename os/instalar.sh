@@ -4,6 +4,7 @@
 #   sudo ./os/instalar.sh                 # compila Arquitec DSP (fork de Guitarix 0.47)
 #   sudo ./os/instalar.sh --guitarix-debian   # usa el Guitarix 0.46 de Debian (más rápido)
 #   sudo ./os/instalar.sh --sin-pantalla      # equipo sin monitor: solo tablet/celular
+#   sudo ./os/instalar.sh --motor-generico    # motor para cualquier PC x86-64 (lo usa la imagen USB)
 #
 # Qué hace (se puede correr de nuevo sin romper nada):
 #   1. Paquetes: audio (JACK), pantalla (cage + Chromium), red (NetworkManager + avahi), etc.
@@ -17,15 +18,16 @@ set -euo pipefail
 
 DESTINO=/opt/pedalsistema
 USUARIO=pedal
-REPO_MOTOR=https://github.com/egimenez-bot/arquitec-dsp.git
 REPO_APP=https://github.com/leoegimenez-ops/OSPedal.git
 ORIGEN="$(cd "$(dirname "$0")/.." && pwd)"
 MOTOR_DEBIAN=0
+MOTOR_GENERICO=
 PANTALLA=1
 for arg in "$@"; do
   case "$arg" in
     --guitarix-debian) MOTOR_DEBIAN=1 ;;
     --sin-pantalla) PANTALLA=0 ;;
+    --motor-generico) MOTOR_GENERICO=1 ;;
     *) echo "Opción desconocida: $arg" >&2; exit 2 ;;
   esac
 done
@@ -69,8 +71,8 @@ else
 fi
 git -C "$DESTINO" remote set-url origin "$REPO_APP" 2>/dev/null || true
 chown -R "$USUARIO:$USUARIO" "$DESTINO"
-sudo -u "$USUARIO" python3 -m venv "$DESTINO/.venv"
-sudo -u "$USUARIO" "$DESTINO/.venv/bin/pip" install -q -r "$DESTINO/server/requirements.txt" \
+runuser -u "$USUARIO" -- python3 -m venv "$DESTINO/.venv"
+runuser -u "$USUARIO" -- "$DESTINO/.venv/bin/pip" install -q -r "$DESTINO/server/requirements.txt" \
                                                        -r "$DESTINO/engine/requirements.txt"
 chmod +x "$DESTINO/os/bin/"*
 
@@ -80,23 +82,8 @@ if [ "$MOTOR_DEBIAN" = 1 ]; then
 elif [ "$(cat /var/lib/pedalsistema/motor-version 2>/dev/null)" = "$(tr -d '[:space:]' < "$DESTINO/os/MOTOR_VERSION")" ]; then
   echo "Arquitec DSP ya instalado en la versión pedida."
 else
-  # Fuentes de Debian para traer las dependencias de compilación de Guitarix.
-  if [ -f /etc/apt/sources.list.d/debian.sources ] && ! grep -q 'deb-src' /etc/apt/sources.list.d/debian.sources; then
-    sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
-    apt-get update
-  fi
-  apt-get build-dep -y guitarix
-  mkdir -p /usr/local/src
-  [ -d /usr/local/src/arquitec-dsp/.git ] || git clone "$REPO_MOTOR" /usr/local/src/arquitec-dsp
   # La versión exacta del motor con la que se probó esta versión de la app (os/MOTOR_VERSION).
-  git -C /usr/local/src/arquitec-dsp checkout --quiet --detach "$(tr -d '[:space:]' < "$DESTINO/os/MOTOR_VERSION")"
-  cd /usr/local/src/arquitec-dsp/trunk
-  # Mismas opciones con las que se compiló y verificó en desarrollo (build/config.log).
-  ./waf configure --prefix=/usr --includeresampler --includeconvolver --optimization
-  ./waf build -j"$(nproc)"
-  ./waf install
-  cd - >/dev/null
-  tr -d '[:space:]' < "$DESTINO/os/MOTOR_VERSION" > /var/lib/pedalsistema/motor-version
+  PS_RAIZ="$DESTINO" "$DESTINO/os/bin/compilar-motor" ${MOTOR_GENERICO:+--generico}
 fi
 
 paso "5/6 Servicios, tiempo real y permisos"
@@ -104,7 +91,7 @@ install -m 644 "$DESTINO"/os/systemd/*.service /etc/systemd/system/
 install -m 644 "$DESTINO/os/etc/security/limits.d/95-pedalsistema-audio.conf" /etc/security/limits.d/
 install -m 644 "$DESTINO/os/etc/polkit-1/rules.d/50-pedalsistema.rules" /etc/polkit-1/rules.d/
 install -m 644 "$DESTINO/os/etc/pam.d/pedalsistema-kiosk" /etc/pam.d/
-systemctl daemon-reload
+systemctl daemon-reload 2>/dev/null || true    # armando la imagen (chroot) no hay systemd corriendo
 systemctl enable pedalsistema-rendimiento.service pedalsistema-jack.service pedalsistema.service \
                  NetworkManager.service avahi-daemon.service
 if [ "$PANTALLA" = 1 ]; then
@@ -116,7 +103,7 @@ else
 fi
 
 paso "6/6 Nombre en la red"
-hostnamectl set-hostname pedalsistema
+hostnamectl set-hostname pedalsistema 2>/dev/null || echo pedalsistema > /etc/hostname
 grep -q 'pedalsistema' /etc/hosts || echo "127.0.1.1 pedalsistema" >> /etc/hosts
 
 echo
