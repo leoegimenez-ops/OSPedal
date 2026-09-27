@@ -55,6 +55,18 @@ lb config \
   --bootappend-live "$(echo $ARRANQUE)" \
   >/dev/null
 
+# Menú de arranque: live-build lo deja esperando para siempre a que alguien elija (un pedal tiene
+# que arrancar solo) y GRUB hace un pitido. Mismas plantillas, con 3 segundos y sin pitido.
+# (Los archivos de config/bootloaders/ pisan a los de live-build; el resto queda igual.)
+P=/usr/share/live/build/bootloaders
+mkdir -p config/bootloaders/isolinux config/bootloaders/grub-pc
+sed 's/^timeout 0$/timeout 30/' "$P/isolinux/isolinux.cfg" > config/bootloaders/isolinux/isolinux.cfg
+sed -e 's/^set default=0$/set default=0\nset timeout=3/' -e '/^insmod play$/d' -e '/^play /d' \
+    "$P/grub-pc/config.cfg" > config/bootloaders/grub-pc/config.cfg
+grep -q '^timeout 30$' config/bootloaders/isolinux/isolinux.cfg &&
+  grep -q '^set timeout=3$' config/bootloaders/grub-pc/config.cfg ||
+  { echo "No se pudo ajustar el menú de arranque (¿cambió live-build?)" >&2; exit 1; }
+
 # Paquetes base del sistema live (los de PedalSistema los instala os/instalar.sh).
 cat > config/package-lists/pedalsistema.list.chroot <<'EOF'
 live-boot
