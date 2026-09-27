@@ -63,4 +63,10 @@ el QR de SYSTEM › Connect a device.
 Escrito y revisado en la PC de desarrollo (WSL2): sintaxis de los servicios verificada con
 `systemd-analyze verify`, el lanzador de JACK probado con `--dry-run`. **Falta probarlo en un
 equipo real** (arranque, pantalla táctil, interfaz de audio): WSL2 no tiene pantalla ni placa de
-sonido. La imagen USB (`os/imagen/`) se prueba primero en QEMU y después en equipos reales.
+sonido.
+
+**Imagen USB, probada en QEMU** (`os/imagen/probar-en-qemu`, procesador tipo Core 2 sin
+SSE4.2/AVX, 2 GB): arranca sola por el menú de BIOS y de UEFI, la app y los motores andan en esa
+CPU, JACK arranca con la placa HDA, guarda y recupera lo guardado tras apagar y prender, avisa
+cuando el pendrive no tiene persistencia, y la pantalla muestra la app. **Falta probarla en un
+equipo real** (placa de audio, pantalla táctil, Wi-Fi, latencia).

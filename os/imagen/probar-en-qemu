@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Prueba la imagen USB en QEMU antes de grabarla: procesador tipo Core 2 (sin SSE4.2/AVX, como
+una PC vieja), 2 GB, placa de sonido HDA emulada. Sin KVM (WSL2) todo se emula por software.
+
+  sudo os/imagen/probar-en-qemu imagen-usb/PedalSistema-X.iso FASE [--uefi] [--menu]
+  QEMU_SMP=4 ...   núcleos emulados (default 1). Con 1, Chromium tarda más de 10 min en mostrar
+                   la app (emulado va ~30 veces más lento): para ver la pantalla, usar 4.
+
+Necesita: qemu-system-x86 ovmf xorriso. Deja registros en /tmp/qemu-pedal/ y capturas en $CAPS.
+
+FASE:
+  primera   con disco de persistencia NUEVO: app arriba, motores, cambia tempo y guarda, apaga
+  segunda   con el MISMO disco: el tempo guardado sigue ahí
+  sin       sin disco de persistencia: la app avisa que no guarda
+--menu: arranca por el menú real de la ISO (BIOS o UEFI) en vez de kernel directo; sirve para
+        verificar que arranca sola, sin que nadie toque nada.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+ISO = Path(sys.argv[1])
+FASE = sys.argv[2]
+UEFI = "--uefi" in sys.argv
+MENU = "--menu" in sys.argv
+D = Path("/tmp/qemu-pedal")
+D.mkdir(exist_ok=True)
+DISCO = D / "persistencia.img"
+QMP = D / f"qmp-{FASE}.sock"
+SERIE = D / f"serie-{FASE}{'-uefi' if UEFI else ''}.log"
+CAPS = Path(os.environ.get("CAPS", "/tmp"))
+URL = "http://127.0.0.1:18000"
+T0 = time.time()
+
+
+def log(*a):
+    print(f"[{time.time() - T0:6.0f}s]", *a, flush=True)
+
+
+def sh(*cmd):
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+
+
+def crear_disco():
+    """Disco con una partición ext4 "persistence" y persistence.conf = "/ union" (lo que hace Rufus)."""
+    raiz = D / "raiz-persistencia"
+    raiz.mkdir(exist_ok=True)
+    (raiz / "persistence.conf").write_text("/ union\n")
+    fs = D / "fs.img"
+    fs.unlink(missing_ok=True)
+    sh("mkfs.ext4", "-q", "-F", "-L", "persistence", "-d", str(raiz), str(fs), "3071M")
+    DISCO.unlink(missing_ok=True)
+    sh("truncate", "-s", "3G", str(DISCO))
+    subprocess.run(["sfdisk", "-q", str(DISCO)], input=b"label: dos\nstart=2048, type=83\n", check=True)
+    sh("dd", f"if={fs}", f"of={DISCO}", "bs=1M", "seek=1", "conv=notrunc", "status=none")
+    fs.unlink()
+
+
+def http(ruta, datos=None, espera=10):
+    req = urllib.request.Request(URL + ruta, method="POST" if datos is not None else "GET",
+                                 data=json.dumps(datos).encode() if datos is not None else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=espera) as r:
+        return json.loads(r.read())
+
+
+def qmp(comando, **args):
+    s = socket.socket(socket.AF_UNIX)
+    s.connect(str(QMP))
+    f = s.makefile("rw")
+    f.readline()
+    for c in ({"execute": "qmp_capabilities"}, {"execute": comando, "arguments": args}):
+        f.write(json.dumps(c) + "\n")
+        f.flush()
+        while True:
+            r = json.loads(f.readline())
+            if "return" in r or "error" in r:
+                break
+    s.close()
+    return r
+
+
+def captura(nombre):
+    ruta = CAPS / f"qemu-{nombre}.png"
+    r = qmp("screendump", filename=str(ruta), format="png")
+    log("captura", ruta.name, "" if "return" in r else r)
+
+
+def esperar(cond, minutos, que):
+    fin = time.time() + minutos * 60
+    while time.time() < fin:
+        if qemu.poll() is not None:
+            log(f"QEMU terminó antes de: {que}")
+            return False
+        try:
+            if cond():
+                log("OK", que)
+                return True
+        except Exception:
+            pass
+        time.sleep(5)
+    log("TIEMPO AGOTADO:", que)
+    return False
+
+
+if FASE == "primera":
+    crear_disco()
+
+cmd = ["qemu-system-x86_64", "-machine", "q35" if UEFI else "pc", "-cpu", "Conroe", "-smp", os.environ.get("QEMU_SMP", "1"), "-accel", "tcg,thread=multi",
+       "-m", "2048", "-display", "none", "-vga", "std",
+       "-netdev", "user,id=n0,hostfwd=tcp:127.0.0.1:18000-:8000", "-device", "e1000,netdev=n0",
+       "-audiodev", "none,id=a0", "-device", "intel-hda", "-device", "hda-duplex,audiodev=a0",
+       "-qmp", f"unix:{QMP},server=on,wait=off", "-serial", f"file:{SERIE}",
+       "-drive", f"file={ISO},media=cdrom,readonly=on,if=ide,index=2"]
+if FASE != "sin":
+    cmd += ["-drive", f"file={DISCO},format=raw,if=ide,index=0"]
+if UEFI:
+    cmd += ["-bios", "/usr/share/ovmf/OVMF.fd"]
+if not MENU:
+    # Kernel directo con los mismos parámetros de la ISO + consola serie (para ver fallas).
+    k, i = D / "vmlinuz", D / "initrd.img"
+    sh("xorriso", "-osirrox", "on", "-indev", str(ISO), "-extract", "/live/vmlinuz", str(k),
+       "-extract", "/live/initrd.img", str(i))
+    append = ("boot=live components persistence hostname=pedalsistema locales=es_AR.UTF-8 "
+              "keyboard-layouts=latam timezone=America/Argentina/Buenos_Aires "
+              "live-config.nocomponents=user-setup,sudo,login threadirqs preempt=full "
+              "console=tty0 console=ttyS0,115200 systemd.show_status=1")
+    cmd += ["-kernel", str(k), "-initrd", str(i), "-append", append]
+else:
+    cmd += ["-boot", "d"]
+QMP.unlink(missing_ok=True)
+log("QEMU:", FASE, "UEFI" if UEFI else "BIOS", "menú real" if MENU else "kernel directo")
+qemu = subprocess.Popen(cmd)
+ok = True
+try:
+    time.sleep(3)
+    if MENU:
+        time.sleep(25)
+        captura(f"menu-{'uefi' if UEFI else 'bios'}")
+    if not esperar(lambda: http("/lineas"), 30, "la app responde (arrancó sola)"):
+        ok = False
+        captura(f"{FASE}-fallo")
+        raise SystemExit(1)
+    lineas = http("/lineas")
+    log("líneas:", lineas)
+    local = http("/sistema/local")
+    log("/sistema/local:", local)
+    esperado = FASE != "sin"
+    if local.get("guarda_cambios") is not esperado:
+        log("MAL: guarda_cambios debería ser", esperado)
+        ok = False
+    info = http("/sistema/info")
+    log("CPU:", info["nucleos"], "núcleo(s); memoria:", info["memoria"], "; audio:", info["audio"])
+    l0 = lineas[0]
+    ok &= esperar(lambda: http(f"/lineas/{l0}/estado").get("preset"), 10, f"motor de {l0} responde")
+    est = http(f"/lineas/{l0}/estado")
+    log("estado:", {k: est.get(k) for k in ("preset", "tempo_bpm", "escena_activa", "modo", "problemas_audio")})
+    grid = http(f"/lineas/{l0}/grid")
+    log("grid: bloques", [b.get("id") for b in grid.get("principal", grid.get("bloques", []))][:10])
+    if FASE == "primera":
+        http(f"/lineas/{l0}/tempo", {"bpm": 137, "alcance": "preset"})
+        g = http(f"/lineas/{l0}/guardar", {})
+        log("guardado:", g.get("mensaje"), "tempo", g.get("tempo_bpm"))
+    elif FASE == "segunda":
+        t = http(f"/lineas/{l0}/estado").get("tempo_bpm")
+        log("tempo después de apagar y prender:", t)
+        if t != 137:
+            log("MAL: se perdió lo guardado")
+            ok = False
+    # La pantalla (cage + Chromium) tarda más que la app en un procesador emulado: esperar a que
+    # deje de estar en blanco. La app es oscura; captura PPM cruda (se mide sin librerías).
+    def pantalla_con_contenido():
+        ppm = D / "pantalla.ppm"
+        qmp("screendump", filename=str(ppm))
+        px = ppm.read_bytes().split(b"\n", 3)[3]
+        muestras = range(0, len(px) - 2, 3 * 97)
+        oscuros = sum(1 for i in muestras if px[i] < 60)
+        claros = sum(1 for i in muestras if px[i] > 120)
+        # Fondo oscuro Y algo de texto/íconos claros: ni negro total (cage sin navegador todavía)
+        # ni blanco (Chromium cargando).
+        return oscuros > len(muestras) * 0.2 and len(muestras) * 0.004 < claros < len(muestras) * 0.5
+    esperar(pantalla_con_contenido, 8, "la pantalla muestra la app")
+    captura(f"{FASE}{'-uefi' if UEFI else ''}")
+finally:
+    if qemu.poll() is None:
+        log("apagando (botón de encendido ACPI)")
+        try:
+            qmp("system_powerdown")
+            qemu.wait(timeout=240)
+            log("se apagó solo:", qemu.returncode)
+        except Exception as e:
+            log("no se apagó solo, se corta:", e)
+            qemu.kill()
+    for linea in (SERIE.read_text(errors="replace") if SERIE.exists() else "").splitlines():
+        if "FAILED" in linea or "Failed to start" in linea or "Illegal instruction" in linea or "core-dump" in linea:
+            log("SERIE:", linea.strip())
+print("RESULTADO:", "OK" if ok else "FALLÓ")
