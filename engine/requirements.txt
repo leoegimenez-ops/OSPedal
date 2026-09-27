@@ -2,4 +2,6 @@
 # Instalar en el venv del proyecto (.venv/), no en el Python de sistema
 # (Debian bloquea pip install fuera de un venv, PEP 668).
 JACK-Client==0.5.6
-numpy==2.5.3
+# 2.3.x: pide solo SSE3 (cualquier PC x86-64) y usa AVX2 si el procesador lo tiene. Desde 2.4
+# exige x86-64-v2 (SSE4.2): el mezclador no arrancaría en PCs viejas (ej. Core 2 / Celeron 2008).
+numpy==2.3.5
