@@ -1278,3 +1278,17 @@ body {
 .act-estado.pedido b, .act-estado.en_curso b { color: var(--activo); }
 .act-estado.revertida, .act-estado.revertida_sin_respuesta, .act-estado.error { border-color: color-mix(in srgb, var(--error) 60%, transparent); }
 .act-estado.revertida b, .act-estado.revertida_sin_respuesta b, .act-estado.error b { color: var(--error); }
+
+/* -- Arrancado del pendrive sin persistencia: nada se guarda (server/sistema.py guarda_cambios) -- */
+
+.sin-guardar {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  background: #3A1215;
+  border-top: 1px solid var(--error);
+  color: #FFB4B4;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+}
+.sin-guardar b { color: #fff; }

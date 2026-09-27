@@ -51,10 +51,29 @@ def exigir_local(request: Request) -> None:
         raise HTTPException(403, "Only from the system's own screen")
 
 
+def guarda_cambios() -> bool:
+    """¿Sobrevive lo que se guarda a un apagado? Instalado en disco, sí. Arrancado desde la imagen
+    USB (live), solo si el pendrive tiene la partición "persistence" (la crea Rufus): sin ella
+    todo vive en la RAM y al apagar se pierden presets, setlists y configuración."""
+    try:
+        cmdline = Path(os.environ.get("PS_PROC_CMDLINE", "/proc/cmdline")).read_text().split()
+    except OSError:
+        return True
+    if "boot=live" not in cmdline:
+        return True
+    try:
+        montajes = Path(os.environ.get("PS_PROC_MOUNTS", "/proc/mounts")).read_text().splitlines()
+    except OSError:
+        return False
+    # live-boot monta cada partición de persistencia en /run/live/persistence/<dispositivo>.
+    return any(len(m.split()) > 1 and m.split()[1].startswith("/run/live/persistence/") for m in montajes)
+
+
 @router.get("/local")
 def soy_local(request: Request) -> dict:
-    """La app pregunta esto para saber si mostrar la pestaña SYSTEM."""
-    return {"local": es_local(request)}
+    """La app pregunta esto al arrancar: si mostrar la pestaña SYSTEM, y (en todas las pantallas,
+    también la tablet) si avisar que lo que se guarde se va a perder al apagar."""
+    return {"local": es_local(request), "guarda_cambios": guarda_cambios()}
 
 
 # -- Estado del equipo ---------------------------------------------------------------------

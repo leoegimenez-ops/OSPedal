@@ -5,7 +5,31 @@ pantalla completa, con una pestaña **SYSTEM** extra que solo aparece en la pant
 equipo (conectar dispositivos con QR, audio, pedalera MIDI, archivos IR/NAM, Wi-Fi, estado,
 actualizaciones, apagar).
 
-## Instalar
+## Pendrive booteable (la forma recomendada)
+
+**Armar la imagen** (en Debian 13 o WSL2 con Debian 13, con `live-build`; ~40 min la primera vez):
+
+```
+sudo os/imagen/armar-imagen        # deja imagen-usb/PedalSistema-<versión>.iso (+ .sha256)
+```
+
+Usa el último commit del repo. Adentro corre el mismo `os/instalar.sh`, con el motor compilado
+**genérico** (corre en cualquier PC x86-64 de 64 bits; al actualizar el motor en el equipo, se
+recompila optimizado para ese procesador).
+
+**Grabarla desde Windows con [Rufus](https://rufus.ie)** (versión portable, no se instala):
+
+1. Elegir el pendrive y la ISO.
+2. **Persistent partition size**: todo lo que se pueda (ej. 8 GB o más). Ahí se guardan presets,
+   setlists, configuración, archivos IR/NAM y las actualizaciones. **Sin esa partición el equipo
+   arranca igual pero olvida todo al apagarse** (la app lo avisa con una franja roja fija).
+3. Si Rufus pregunta, modo **ISO** (no DD).
+
+**Arrancar:** conectar el pendrive, encender y elegir el pendrive en el menú de arranque de la PC
+(F12, F11, F8 o Esc según la marca). Arranca solo en la app. BIOS y UEFI; con Secure Boot
+activado puede no arrancar: desactivarlo en el BIOS.
+
+## Instalar sobre un Debian ya instalado
 
 Sobre un Debian 13 (trixie) recién instalado, con este repo copiado:
 
@@ -39,4 +63,4 @@ el QR de SYSTEM › Connect a device.
 Escrito y revisado en la PC de desarrollo (WSL2): sintaxis de los servicios verificada con
 `systemd-analyze verify`, el lanzador de JACK probado con `--dry-run`. **Falta probarlo en un
 equipo real** (arranque, pantalla táctil, interfaz de audio): WSL2 no tiene pantalla ni placa de
-sonido. El siguiente paso es armar la imagen booteable (USB) con esto adentro.
+sonido. La imagen USB (`os/imagen/`) se prueba primero en QEMU y después en equipos reales.

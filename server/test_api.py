@@ -755,9 +755,28 @@ check("quitar la linea", r.status_code == 200 and r.json()["split"] is False
 
 print("\n27d. Sistema (pantalla del OS): solo local, nunca por el tunel")
 r = client.get("/sistema/local")
-check("la pantalla local se reconoce", r.json() == {"local": True}, f"-> {r.json()}")
+check("la pantalla local se reconoce", r.json() == {"local": True, "guarda_cambios": True}, f"-> {r.json()}")
 r = client.get("/sistema/local", headers={"Cf-Connecting-Ip": "181.1.2.3"})
-check("un pedido que llega por el tunel NO es local", r.json() == {"local": False})
+check("un pedido que llega por el tunel NO es local", r.json()["local"] is False)
+
+# Arrancado del pendrive (live): se guarda solo si live-boot montó la partición de persistencia.
+with tempfile.TemporaryDirectory() as d_live:
+    p_cmd, p_mnt = Path(d_live) / "cmdline", Path(d_live) / "mounts"
+    p_cmd.write_text("BOOT_IMAGE=/live/vmlinuz boot=live components persistence quiet\n")
+    p_mnt.write_text("overlay / overlay rw 0 0\ntmpfs /run tmpfs rw 0 0\n")
+    os.environ["PS_PROC_CMDLINE"], os.environ["PS_PROC_MOUNTS"] = str(p_cmd), str(p_mnt)
+    try:
+        r = client.get("/sistema/local", headers={"Cf-Connecting-Ip": "181.1.2.3"})
+        check("pendrive SIN persistencia: avisa a todas las pantallas (tambien la tablet)",
+              r.json()["guarda_cambios"] is False, f"-> {r.json()}")
+        p_mnt.write_text("overlay / overlay rw 0 0\n/dev/sdb2 /run/live/persistence/sdb2 ext4 rw 0 0\n")
+        check("pendrive CON persistencia: se guarda",
+              client.get("/sistema/local").json()["guarda_cambios"] is True)
+        p_cmd.write_text("BOOT_IMAGE=/boot/vmlinuz root=/dev/sda1 ro quiet\n")
+        p_mnt.write_text("/dev/sda1 / ext4 rw 0 0\n")
+        check("instalado en disco: se guarda", client.get("/sistema/local").json()["guarda_cambios"] is True)
+    finally:
+        del os.environ["PS_PROC_CMDLINE"], os.environ["PS_PROC_MOUNTS"]
 r = client.post("/sistema/energia", json={"accion": "apagar"}, headers={"Cf-Connecting-Ip": "181.1.2.3"})
 check("apagar desde internet: 403", r.status_code == 403, f"-> {r.status_code}")
 r = client.post("/sistema/energia", json={"accion": "apagar"}, headers={"X-Forwarded-For": "192.168.0.50"})

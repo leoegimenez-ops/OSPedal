@@ -2348,9 +2348,17 @@ async function iniciar() {
   setInterval(actualizarMotor, 5000);
   conectarSync();
   try {
-    if ((await api("/sistema/local")).local) {
+    const s = await api("/sistema/local");
+    if (s.local) {
       document.body.classList.add("modo-os");
       document.querySelector('.tab[data-tab="sistema"]').hidden = false;
+    }
+    if (s.guarda_cambios === false) {
+      // Arrancó del pendrive sin partición de persistencia: todo se pierde al apagar. Fijo, sin
+      // cerrar: es la única forma de que no se descubra después del show.
+      const franja = nuevo("div", "sin-guardar",
+        "<b>Changes are not being saved.</b> This USB drive has no storage partition: presets and settings will be lost when the system is turned off.");
+      document.body.insertBefore(franja, document.getElementById("barra-tabs"));
     }
   } catch (e) { /* sin sistema: es una pantalla remota */ }
 }
