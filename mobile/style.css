@@ -1242,3 +1242,24 @@ body {
 }
 .midi-chip i { font-style: normal; color: var(--tenue); }
 .pildora.aprendiendo { background: var(--activo); color: #000; border-color: var(--activo); animation: parpadeo 1s steps(1) infinite; }
+
+/* -- SYSTEM > Network / Update ------------------------------------------------------------------- */
+
+.conf-cab .pildora { align-self: flex-start; margin-top: 6px; padding: 0 14px; flex: 0 0 auto; }
+.conf-valor { font-size: 13px; }
+.conf-nota { padding: 12px 14px; color: var(--tenue); font-size: 13px; line-height: 1.5; }
+.conf-nota ul { margin: 6px 0 0; padding-left: 18px; color: #D4D4D8; }
+.conf > .conf-ctrl { padding: 0 14px 14px; justify-content: flex-start; }
+.redes { display: flex; flex-direction: column; }
+.red {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left;
+  padding: 12px 14px; border: none; border-bottom: 1px solid #19191D; background: transparent;
+}
+.red b { font-size: 14px; }
+.red small { color: var(--tenue); font-size: 12px; white-space: nowrap; }
+.red.activa b { color: var(--ok); }
+.teclado-ojo {
+  position: absolute; right: 60px; top: 50%; transform: translateY(-50%);
+  padding: 4px 10px; border-radius: 7px; border: 1px solid var(--borde); background: var(--sup2);
+  font-size: 12px; color: var(--tenue);
+}

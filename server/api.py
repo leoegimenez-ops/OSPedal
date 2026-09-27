@@ -342,12 +342,14 @@ app = FastAPI(title="PedalSistema", lifespan=lifespan)
 
 from server import archivos                               # noqa: E402 -- IR / NAM / AIDA-X
 from server import equipo                                 # noqa: E402 -- audio y pedalera MIDI
+from server import red                                    # noqa: E402 -- Wi-Fi / hotspot
 from server.sistema import exigir_local                 # noqa: E402
 from server.sistema import router as _router_sistema   # noqa: E402 -- funciones del OS (pantalla local)
 
 app.include_router(_router_sistema)
 app.include_router(archivos.router)
 app.include_router(equipo.router)
+app.include_router(red.router)
 
 
 @app.exception_handler(GuitarixError)

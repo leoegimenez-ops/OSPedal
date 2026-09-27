@@ -1635,10 +1635,15 @@ function esModoOS() {
   return document.body.classList.contains("modo-os");
 }
 
-function pedirTexto(titulo, inicial = "", textoOk = "Save") {
+const FILA_SIMBOLOS = ["!", "@", "#", "$", "%", "*", "(", ")", "_", "+", "=", "?", ":", ";", ","];
+
+/* `clave`: modo contraseña (Wi-Fi): hasta 63 caracteres, símbolos, texto oculto con 👁. */
+function pedirTexto(titulo, inicial = "", textoOk = "Save", { clave = false } = {}) {
+  const MAX = clave ? 63 : MAX_NOMBRE;
   return new Promise((resolver) => {
     let texto = inicial;
-    let mayus = !inicial;          // primera letra en mayúscula
+    let mayus = !inicial && !clave;          // nombres: primera letra en mayúscula
+    let visible = !clave;
     let resuelto = false;
     const terminar = (valor) => {
       if (resuelto) return;
@@ -1650,7 +1655,13 @@ function pedirTexto(titulo, inicial = "", textoOk = "Save") {
     const campo = nuevo("div", "teclado-campo");
     cuerpo.appendChild(campo);
     const pintar = () => {
-      campo.innerHTML = `${esc(texto)}<i class="cursor"></i><small>${texto.length}/${MAX_NOMBRE}</small>`;
+      const mostrado = visible ? texto : "•".repeat(texto.length);
+      campo.innerHTML = `${esc(mostrado)}<i class="cursor"></i><small>${texto.length}/${MAX}</small>`;
+      if (clave) {
+        const ojo = nuevo("button", "teclado-ojo", visible ? "Hide" : "Show");
+        ojo.addEventListener("click", () => { visible = !visible; pintar(); });
+        campo.appendChild(ojo);
+      }
       for (const b of cuerpo.querySelectorAll(".tecla-letra")) {
         b.textContent = mayus ? b.dataset.t.toUpperCase() : b.dataset.t;
       }
@@ -1659,13 +1670,13 @@ function pedirTexto(titulo, inicial = "", textoOk = "Save") {
       ok.disabled = !texto.trim();
     };
     const escribir = (c) => {
-      if (texto.length >= MAX_NOMBRE) return;
+      if (texto.length >= MAX) return;
       texto += mayus ? c.toUpperCase() : c;
       mayus = false;
       pintar();
     };
     const borrar = () => { texto = texto.slice(0, -1); pintar(); };
-    for (const fila of FILAS_TECLADO) {
+    for (const fila of clave ? [...FILAS_TECLADO, FILA_SIMBOLOS] : FILAS_TECLADO) {
       const f = nuevo("div", "teclado-fila");
       for (const t of fila) {
         let b;
@@ -1690,8 +1701,9 @@ function pedirTexto(titulo, inicial = "", textoOk = "Save") {
     const espacio = nuevo("button", "tecla tecla-espacio", "space");
     const ok = nuevo("button", "tecla tecla-accion tecla-ok", esc(textoOk));
     cancelar.addEventListener("click", () => { terminar(null); cerrarCapas(); });
-    espacio.addEventListener("click", () => { if (texto && !texto.endsWith(" ")) escribir(" "); });
-    ok.addEventListener("click", () => { terminar(texto.trim()); cerrarCapas(); });
+    espacio.addEventListener("click", () => { if (clave || (texto && !texto.endsWith(" "))) escribir(" "); });
+    // Una clave va tal cual (los espacios cuentan); un nombre se recorta.
+    ok.addEventListener("click", () => { terminar(clave ? texto : texto.trim()); cerrarCapas(); });
     abajo.append(cancelar, espacio, ok);
     cuerpo.appendChild(abajo);
 
@@ -1701,7 +1713,7 @@ function pedirTexto(titulo, inicial = "", textoOk = "Save") {
       if (ev.key === "Backspace") { ev.preventDefault(); borrar(); return; }
       if (ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey) {
         ev.preventDefault();
-        if (texto.length < MAX_NOMBRE) { texto += ev.key; mayus = false; pintar(); }
+        if (texto.length < MAX) { texto += ev.key; mayus = false; pintar(); }
       }
     }
     addEventListener("keydown", alTeclear, true);
@@ -1772,7 +1784,9 @@ const SECCIONES_SISTEMA = [
   { id: "audio", nombre: "Audio" },
   { id: "midi", nombre: "MIDI pedalboard" },
   { id: "archivos", nombre: "Files (IR / captures)" },
+  { id: "red", nombre: "Network" },
   { id: "estado", nombre: "Status" },
+  { id: "actualizar", nombre: "Update" },
   { id: "energia", nombre: "Power" },
 ];
 let tSistema = null;
@@ -1792,7 +1806,110 @@ function renderSistema() {
   pantalla.append(menu, cuerpo);
   $contenido.appendChild(pantalla);
   ({ conectar: seccionConectar, audio: seccionAudio, midi: seccionMidi, archivos: seccionArchivos,
-    estado: seccionEstado, energia: seccionEnergia }[seccion])(cuerpo);
+    red: seccionRed, estado: seccionEstado, actualizar: seccionActualizar, energia: seccionEnergia }[seccion])(cuerpo);
+}
+
+async function seccionRed(cuerpo) {
+  let r;
+  try { r = await api("/red/estado"); } catch (e) { cuerpo.textContent = e.message; return; }
+  cuerpo.innerHTML = "";
+  const col = nuevo("div", "confs");
+  const est = tarjetaConfig("Connection", r.ips.length ? r.ips.map((i) => `${i.interfaz}: ${i.ip}`).join(" · ") : "Not connected");
+  for (const d of r.dispositivos) {
+    est.appendChild(filaConfig(`${d.tipo === "wifi" ? "Wi-Fi" : "Cable"} (${d.dispositivo})`,
+      nuevo("b", "conf-valor", esc(d.conexion || d.estado))));
+  }
+  col.appendChild(est);
+  if (!r.disponible) {
+    col.appendChild(nuevo("div", "conf-nota",
+      "Wi-Fi settings work on the system itself. This development machine has no network manager."));
+    cuerpo.appendChild(col);
+    return;
+  }
+
+  const wifi = tarjetaConfig("Wi-Fi networks", "Tap a network to connect");
+  const lista = nuevo("div", "redes");
+  const buscar = nuevo("button", "pildora on", "SCAN");
+  const escanear = async () => {
+    lista.innerHTML = '<div class="conf-nota">Scanning…</div>';
+    try {
+      const { redes } = await api("/red/wifi");
+      lista.innerHTML = "";
+      if (!redes.length) lista.appendChild(nuevo("div", "conf-nota", "No networks found"));
+      for (const n of redes) {
+        const barras = n.senal > 70 ? "▂▄▆█" : n.senal > 45 ? "▂▄▆" : n.senal > 20 ? "▂▄" : "▂";
+        const b = nuevo("button", "red" + (n.conectada ? " activa" : ""),
+          `<b>${esc(n.ssid)}</b><small>${barras} ${n.senal}%${n.segura ? " · 🔒" : ""}${n.conectada ? " · connected" : ""}</small>`);
+        b.addEventListener("click", async () => {
+          let clave = null;
+          if (n.segura && !n.conectada) {
+            clave = await pedirTexto(`Password for “${n.ssid}”`, "", "Connect", { clave: true });
+            if (clave === null) return;
+          }
+          aviso(`Connecting to ${n.ssid}…`);
+          try { await api("/red/wifi/conectar", { ssid: n.ssid, clave }); aviso(`Connected to ${n.ssid}`); seccionRed(cuerpo); }
+          catch (e) { aviso(e.message, true); }
+        });
+        lista.appendChild(b);
+      }
+    } catch (e) {
+      lista.innerHTML = "";
+      aviso(e.message, true);
+    }
+  };
+  buscar.addEventListener("click", escanear);
+  wifi.querySelector(".conf-cab").appendChild(buscar);
+  wifi.appendChild(lista);
+  col.appendChild(wifi);
+
+  const hs = tarjetaConfig(`Own Wi-Fi “${r.hotspot}”`,
+    "For venues without Wi-Fi: the system creates its own network and the tablet connects to it directly");
+  const crear = nuevo("button", "pildora on", "CREATE");
+  crear.addEventListener("click", async () => {
+    const clave = await pedirTexto(`Password for “${r.hotspot}” (8+ characters)`, "", "Create", { clave: true });
+    if (clave === null) return;
+    try { await api("/red/hotspot", { activo: true, clave }); aviso(`Wi-Fi “${r.hotspot}” is on`); seccionRed(cuerpo); }
+    catch (e) { aviso(e.message, true); }
+  });
+  const apagar = nuevo("button", "pildora", "TURN OFF");
+  apagar.addEventListener("click", async () => {
+    try { await api("/red/hotspot", { activo: false }); aviso("Own Wi-Fi off"); seccionRed(cuerpo); }
+    catch (e) { aviso(e.message, true); }
+  });
+  hs.appendChild(filaConfig("Then open Connect a device and scan the QR", crear, apagar));
+  col.appendChild(hs);
+  cuerpo.appendChild(col);
+}
+
+async function seccionActualizar(cuerpo) {
+  let v;
+  try { v = await api("/sistema/version"); } catch (e) { cuerpo.textContent = e.message; return; }
+  cuerpo.innerHTML = "";
+  const col = nuevo("div", "confs");
+  const t = tarjetaConfig("Installed version", `${v.commit || "?"} · ${v.fecha || ""}`);
+  t.appendChild(filaConfig(v.descripcion || ""));
+  const resultado = nuevo("div", "conf-nota", "");
+  const buscar = nuevo("button", "pildora on", "CHECK FOR UPDATES");
+  const zonaActualizar = nuevo("div", "conf-ctrl");
+  buscar.addEventListener("click", async () => {
+    resultado.textContent = "Checking…";
+    zonaActualizar.innerHTML = "";
+    try {
+      const r = await api("/sistema/buscar_actualizacion", {});
+      if (!r.hay) { resultado.textContent = "You have the latest version."; return; }
+      resultado.innerHTML = `<b>${r.cantidad} update${r.cantidad === 1 ? "" : "s"} available:</b><ul>${r.novedades.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
+      zonaActualizar.appendChild(botonConfirmado("Update now", "Saves everything, updates and restarts the app (~1 min)", "", async () => {
+        const a = await api("/sistema/actualizar", {});
+        aviso(a.simulado ? a.mensaje : `Updated ${a.antes} → ${a.despues}. Restarting…`);
+      }));
+    } catch (e) {
+      resultado.textContent = e.message;
+    }
+  });
+  t.appendChild(filaConfig("Needs internet (Wi-Fi or cable)", buscar));
+  t.append(resultado, zonaActualizar);
+  col.appendChild(t);
+  cuerpo.appendChild(col);
 }
 
 function selector(opciones, valor, alCambiar) {

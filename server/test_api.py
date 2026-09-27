@@ -903,6 +903,24 @@ check("olvidar una asignacion", r.status_code == 200
 os.close(_escritor)
 api.equipo.detener_midi()
 
+print("\n27h. Red y actualizaciones")
+r = client.get("/sistema/version")
+check("version instalada (commit del repo)", r.status_code == 200 and r.json()["commit"], f"-> {r.json()}")
+r = client.post("/sistema/buscar_actualizacion", headers={"Cf-Connecting-Ip": "1.2.3.4"})
+check("buscar actualizacion desde el tunel: 403", r.status_code == 403)
+r = client.post("/sistema/actualizar")
+check("actualizar en desarrollo: simulado (no toca la copia de trabajo)",
+      r.status_code == 200 and r.json()["simulado"] is True, f"-> {r.text}")
+r = client.post("/sistema/actualizar", headers={"X-Forwarded-For": "10.0.0.2"})
+check("actualizar desde otro dispositivo: 403", r.status_code == 403)
+r = client.get("/red/estado")
+check("estado de red sin nmcli: lo dice, no falla", r.status_code == 200 and r.json()["disponible"] in (True, False),
+      f"-> {r.text[:150]}")
+r = client.post("/red/hotspot", json={"activo": True, "clave": "12345678"}, headers={"Cf-Connecting-Ip": "1.2.3.4"})
+check("crear Wi-Fi propio desde el tunel: 403", r.status_code == 403)
+r = client.post("/red/wifi/conectar", json={"ssid": "X", "clave": "y"}, headers={"X-Forwarded-For": "10.0.0.2"})
+check("conectar Wi-Fi desde otro dispositivo: 403", r.status_code == 403)
+
 print("\n28. Sincronia: un cambio en una pantalla llega a las demas por /sync")
 with client.websocket_connect("/sync") as ws:
     client.post("/lineas/guitarra1/grid/ordenar", headers={"X-Cliente": "tablet"},

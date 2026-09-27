@@ -163,6 +163,67 @@ def qr(texto: str) -> Response:
     return Response(buf.getvalue(), media_type="image/svg+xml")
 
 
+# -- Versión y actualizaciones -------------------------------------------------------------
+#
+# El equipo tiene el repo clonado (la imagen del OS lo instala con git). "Buscar" hace git fetch
+# y cuenta lo nuevo; "Actualizar" guarda todo, trae la versión nueva SOLO si es avance directo
+# (--ff-only: nunca mezcla ni pisa cambios locales), actualiza dependencias y reinicia el servicio.
+
+RAIZ = Path(__file__).resolve().parent.parent
+
+
+def _git(*args: str, timeout: float = 30) -> str:
+    r = subprocess.run(["git", "-C", str(RAIZ), *args], capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        raise HTTPException(502, (r.stderr or r.stdout).strip() or "git error")
+    return r.stdout.strip()
+
+
+@router.get("/version")
+def version() -> dict[str, Any]:
+    try:
+        rama = _git("rev-parse", "--abbrev-ref", "HEAD")
+        return {"commit": _git("rev-parse", "--short", "HEAD"), "rama": rama,
+                "fecha": _git("log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M"),
+                "descripcion": _git("log", "-1", "--format=%s")}
+    except (HTTPException, OSError, subprocess.TimeoutExpired):
+        return {"commit": None, "rama": None, "fecha": None, "descripcion": "Unknown version"}
+
+
+@router.post("/buscar_actualizacion")
+def buscar_actualizacion(request: Request) -> dict[str, Any]:
+    exigir_local(request)
+    rama = _git("rev-parse", "--abbrev-ref", "HEAD")
+    try:
+        _git("fetch", "--quiet", "origin", rama, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "No internet connection (or the server is too slow)")
+    nuevos = _git("log", "--format=%s", f"HEAD..origin/{rama}")
+    lista = [l for l in nuevos.splitlines() if l.strip()]
+    return {"hay": bool(lista), "cantidad": len(lista), "novedades": lista[:12]}
+
+
+@router.post("/actualizar")
+def actualizar(request: Request) -> dict[str, Any]:
+    exigir_local(request)
+    if not SISTEMA_REAL:
+        return {"ok": True, "simulado": True,
+                "mensaje": "Simulated (development machine): the real system updates and restarts itself"}
+    from server import api    # noqa: PLC0415
+    api.guardar_todo()
+    rama = _git("rev-parse", "--abbrev-ref", "HEAD")
+    antes = _git("rev-parse", "--short", "HEAD")
+    _git("pull", "--ff-only", "origin", rama, timeout=120)
+    despues = _git("rev-parse", "--short", "HEAD")
+    pip = RAIZ / ".venv" / "bin" / "pip"
+    for req in ("server/requirements.txt", "engine/requirements.txt"):
+        if pip.exists():
+            subprocess.run([str(pip), "install", "-q", "-r", str(RAIZ / req)], timeout=600)
+    # El servicio del OS (systemd) vuelve a levantar el servidor con el código nuevo.
+    subprocess.Popen(["systemctl", "restart", "pedalsistema"], start_new_session=True)
+    return {"ok": True, "simulado": False, "antes": antes, "despues": despues}
+
+
 # -- Energía ------------------------------------------------------------------------------
 
 class AccionEnergia(BaseModel):
