@@ -11,7 +11,11 @@ set -euo pipefail
 RAIZ="${PS_RAIZ:-/opt/pedalsistema}"
 ESTADO_DIR=/var/lib/pedalsistema
 FUENTES=/usr/local/src/arquitec-dsp
-REPO_MOTOR=https://github.com/egimenez-bot/arquitec-dsp.git
+# De dónde bajar el código: el fork primero; si no se puede (es privado: sin usuario y clave git
+# falla al instante, nunca se queda esperando), el Guitarix original, que tiene los mismos commits
+# mientras el fork no agregue cambios propios.
+REPOS_MOTOR=(https://github.com/egimenez-bot/arquitec-dsp.git https://github.com/brummer10/guitarix.git)
+export GIT_TERMINAL_PROMPT=0
 OPT=(--optimization)
 [ "${1:-}" = --generico ] && OPT=()
 pedido="$(tr -d '[:space:]' < "$RAIZ/os/MOTOR_VERSION")"
@@ -31,9 +35,25 @@ fi
 apt-get build-dep -y guitarix
 
 mkdir -p "$ESTADO_DIR" /usr/local/src
-[ -d "$FUENTES/.git" ] || git clone "$REPO_MOTOR" "$FUENTES"
-git -C "$FUENTES" fetch --quiet origin
+tiene_commit() { git -C "$FUENTES" cat-file -e "$pedido^{commit}" 2>/dev/null; }
+bajar() {
+  local url
+  for url in "${REPOS_MOTOR[@]}"; do
+    if [ ! -d "$FUENTES/.git" ]; then
+      rm -rf "$FUENTES"
+      git clone --quiet "$url" "$FUENTES" || continue
+    else
+      git -C "$FUENTES" fetch --quiet --tags "$url" '+refs/heads/*:refs/remotes/bajado/*' || continue
+    fi
+    tiene_commit && { echo "motor: código de $url"; return 0; }
+  done
+  return 1
+}
+# Si el commit ya está (imagen, o un intento anterior), no hace falta internet.
+tiene_commit || bajar || { echo "No se pudo bajar el motor $pedido (¿sin internet?)" >&2; exit 1; }
 git -C "$FUENTES" checkout --quiet --detach "$pedido"
+# NAM (NeuralAmpModelerCore) y RTNeural vienen como submódulos: sin ellos no compila.
+git -C "$FUENTES" submodule --quiet update --init --recursive
 cd "$FUENTES/trunk"
 ./waf configure --prefix=/usr --includeresampler --includeconvolver "${OPT[@]}"
 ./waf build -j"$(nproc)"
