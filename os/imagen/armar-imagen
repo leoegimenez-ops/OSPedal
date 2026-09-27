@@ -18,6 +18,12 @@ TRABAJO="${PS_TRABAJO_IMAGEN:-/var/tmp/pedalsistema-imagen}"
 SALIDA="${1:-$REPO/imagen-usb}"
 [ "$(id -u)" = 0 ] || { echo "Correr como administrador: sudo $0" >&2; exit 1; }
 command -v lb >/dev/null || { echo "Falta live-build: sudo apt install live-build" >&2; exit 1; }
+# En WSL2 el disco de Linux dice tener cientos de GB libres, pero es un archivo en C: de Windows
+# que crece: si C: se llena, WSL entero empieza a dar errores de lectura. Mirar C: de verdad.
+if [ -d /mnt/c/Windows ]; then
+  libre_c=$(df --output=avail -BG /mnt/c | tail -1 | tr -dc 0-9)
+  [ "$libre_c" -ge 20 ] || { echo "C: de Windows tiene ${libre_c} GB libres; hacen falta ~20 GB." >&2; exit 1; }
+fi
 git_repo() { git -c safe.directory='*' -C "$REPO" "$@"; }
 VERSION="$(git_repo describe --tags --always)"
 [ -z "$(git_repo status --porcelain --untracked-files=no)" ] ||
