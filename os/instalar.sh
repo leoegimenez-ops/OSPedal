@@ -18,6 +18,7 @@ set -euo pipefail
 DESTINO=/opt/pedalsistema
 USUARIO=pedal
 REPO_MOTOR=https://github.com/egimenez-bot/arquitec-dsp.git
+REPO_APP=https://github.com/leoegimenez-ops/OSPedal.git
 ORIGEN="$(cd "$(dirname "$0")/.." && pwd)"
 MOTOR_DEBIAN=0
 PANTALLA=1
@@ -35,11 +36,16 @@ paso() { echo; echo "==> $*"; }
 paso "1/6 Paquetes"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-PAQUETES=(jackd2 alsa-utils python3-venv python3-pip git curl rsync network-manager avahi-daemon
-          polkitd dbus fonts-inter)
-[ "$PANTALLA" = 1 ] && PAQUETES+=(cage chromium seatd)
+# La misma lista que usa la actualización (os/post-actualizacion.sh): no se desincronizan.
+mapfile -t PAQUETES < <(sed 's/#.*//' "$ORIGEN/os/paquetes.txt" | xargs -n1)
+if [ "$PANTALLA" = 0 ]; then
+  mapfile -t PAQUETES < <(printf '%s\n' "${PAQUETES[@]}" | grep -vxE 'cage|chromium|seatd')
+fi
 [ "$MOTOR_DEBIAN" = 1 ] && PAQUETES+=(guitarix)
 apt-get install -y --no-install-recommends "${PAQUETES[@]}"
+mkdir -p /var/lib/pedalsistema
+[ "$PANTALLA" = 0 ] && touch /var/lib/pedalsistema/sin-pantalla
+[ "$MOTOR_DEBIAN" = 1 ] && touch /var/lib/pedalsistema/motor-debian
 
 paso "2/6 Usuario $USUARIO"
 if ! id "$USUARIO" >/dev/null 2>&1; then
@@ -52,9 +58,16 @@ done
 
 paso "3/6 La app en $DESTINO"
 mkdir -p "$DESTINO"
-rsync -a --delete --exclude '.venv' --exclude 'config/' --exclude 'presets/setlists/' \
-      --exclude 'models/nam/*' --exclude 'models/irs/*' --exclude 'models/aidax/*' \
-      "$ORIGEN"/ "$DESTINO"/
+if [ -d "$ORIGEN/.git" ]; then
+  # Con el historial de git: es lo que permite actualizar y volver atrás (SYSTEM > Update).
+  rsync -a --delete --exclude '.venv' --exclude 'config/' --exclude 'presets/setlists/' \
+        --exclude 'models/nam/*' --exclude 'models/irs/*' --exclude 'models/aidax/*' \
+        --exclude 'models/.cargados/' "$ORIGEN"/ "$DESTINO"/
+else
+  echo "Esta copia no tiene historial de git: se clona desde GitHub para poder actualizar."
+  [ -d "$DESTINO/.git" ] || git clone "$REPO_APP" "$DESTINO"
+fi
+git -C "$DESTINO" remote set-url origin "$REPO_APP" 2>/dev/null || true
 chown -R "$USUARIO:$USUARIO" "$DESTINO"
 sudo -u "$USUARIO" python3 -m venv "$DESTINO/.venv"
 sudo -u "$USUARIO" "$DESTINO/.venv/bin/pip" install -q -r "$DESTINO/server/requirements.txt" \
@@ -64,8 +77,8 @@ chmod +x "$DESTINO/os/bin/"*
 paso "4/6 Motor de audio"
 if [ "$MOTOR_DEBIAN" = 1 ]; then
   echo "Guitarix de Debian: $(guitarix --version 2>/dev/null | head -1 || echo instalado)"
-elif command -v guitarix >/dev/null && guitarix --version 2>/dev/null | grep -q '0\.47'; then
-  echo "Arquitec DSP ya instalado."
+elif [ "$(cat /var/lib/pedalsistema/motor-version 2>/dev/null)" = "$(tr -d '[:space:]' < "$DESTINO/os/MOTOR_VERSION")" ]; then
+  echo "Arquitec DSP ya instalado en la versión pedida."
 else
   # Fuentes de Debian para traer las dependencias de compilación de Guitarix.
   if [ -f /etc/apt/sources.list.d/debian.sources ] && ! grep -q 'deb-src' /etc/apt/sources.list.d/debian.sources; then
@@ -74,13 +87,16 @@ else
   fi
   apt-get build-dep -y guitarix
   mkdir -p /usr/local/src
-  [ -d /usr/local/src/arquitec-dsp ] || git clone --depth 1 "$REPO_MOTOR" /usr/local/src/arquitec-dsp
+  [ -d /usr/local/src/arquitec-dsp/.git ] || git clone "$REPO_MOTOR" /usr/local/src/arquitec-dsp
+  # La versión exacta del motor con la que se probó esta versión de la app (os/MOTOR_VERSION).
+  git -C /usr/local/src/arquitec-dsp checkout --quiet --detach "$(tr -d '[:space:]' < "$DESTINO/os/MOTOR_VERSION")"
   cd /usr/local/src/arquitec-dsp/trunk
   # Mismas opciones con las que se compiló y verificó en desarrollo (build/config.log).
   ./waf configure --prefix=/usr --includeresampler --includeconvolver --optimization
   ./waf build -j"$(nproc)"
   ./waf install
   cd - >/dev/null
+  tr -d '[:space:]' < "$DESTINO/os/MOTOR_VERSION" > /var/lib/pedalsistema/motor-version
 fi
 
 paso "5/6 Servicios, tiempo real y permisos"

@@ -1881,33 +1881,107 @@ async function seccionRed(cuerpo) {
   cuerpo.appendChild(col);
 }
 
+/* SYSTEM > Update. Canal estable (solo versiones marcadas como probadas) o desarrollo; buscar por
+ * internet o con un paquete de pendrive; el actualizador corre aparte y vuelve solo a la versión
+ * anterior si la nueva no arranca (os/bin/actualizar). Esta pantalla muestra el resultado. */
+const TEXTO_ESTADO_ACT = {
+  pedido: "Starting the update…",
+  en_curso: "Updating… the app will restart (no sound for about a minute)",
+  ok: "Updated",
+  revertida: "The update failed: the system went back to the previous version",
+  revertida_sin_respuesta: "The update failed and the previous version is not answering",
+  error: "The update failed",
+};
+
 async function seccionActualizar(cuerpo) {
+  clearTimeout(tSistema);
   let v;
-  try { v = await api("/sistema/version"); } catch (e) { cuerpo.textContent = e.message; return; }
+  let ult;
+  try {
+    [v, ult] = await Promise.all([api("/sistema/version"), api("/sistema/actualizacion")]);
+  } catch (e) {
+    // En medio de una actualización la app se reinicia: reintentar en silencio.
+    cuerpo.innerHTML = '<div class="conf-nota">Updating… waiting for the app to come back</div>';
+    tSistema = setTimeout(() => { if (estado.seccionSistema === "actualizar") seccionActualizar(cuerpo); }, 2500);
+    return;
+  }
+  if (estado.tab !== "sistema" || estado.seccionSistema !== "actualizar") return;
   cuerpo.innerHTML = "";
   const col = nuevo("div", "confs");
-  const t = tarjetaConfig("Installed version", `${v.commit || "?"} · ${v.fecha || ""}`);
-  t.appendChild(filaConfig(v.descripcion || ""));
+
+  // Resultado de la última actualización
+  if (ult.estado) {
+    const enCurso = ult.estado === "pedido" || ult.estado === "en_curso";
+    const b = nuevo("div", `act-estado ${ult.estado}`,
+      `<b>${esc(TEXTO_ESTADO_ACT[ult.estado] || ult.estado)}${ult.estado === "ok" ? ` to ${esc(ult.version || ult.destino)}` : ""}</b>` +
+      (ult.motivo ? `<small>${esc(ult.motivo)}</small>` : "") +
+      (enCurso && ult.pasos && ult.pasos.length ? `<small>${esc(ult.pasos[ult.pasos.length - 1].texto)}</small>` : ""));
+    col.appendChild(b);
+    if (enCurso) {
+      tSistema = setTimeout(() => seccionActualizar(cuerpo), 2000);
+    } else if (sessionStorage.getItem("esperandoActualizacion")) {
+      // Terminó mientras mirábamos: recargar para usar el código nuevo (o el anterior restaurado).
+      sessionStorage.removeItem("esperandoActualizacion");
+      location.reload();
+      return;
+    }
+  }
+
+  const t = tarjetaConfig("Installed version", `${v.version || v.commit || "?"} · ${v.fecha || ""} · ${v.descripcion || ""}`);
+  t.appendChild(filaConfig("Update channel",
+    selector([{ valor: "estable", texto: "Stable (recommended)" }, { valor: "desarrollo", texto: "Development (latest, untested)" }],
+      v.canal, async (c) => {
+        try { await api("/sistema/canal", { canal: c }); aviso(c === "estable" ? "Stable channel" : "Development channel"); }
+        catch (e) { aviso(e.message, true); }
+        seccionActualizar(cuerpo);
+      })));
   const resultado = nuevo("div", "conf-nota", "");
+  const zona = nuevo("div", "conf-ctrl");
+  const mostrar = (r) => {
+    zona.innerHTML = "";
+    if (!r.hay) { resultado.textContent = "You have the latest version of this channel."; return; }
+    resultado.innerHTML = `<b>${esc(r.destino === "origin/main" ? "Latest development version" : r.destino)} available` +
+      ` (${r.cantidad} change${r.cantidad === 1 ? "" : "s"}):</b><ul>${r.novedades.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
+    zona.appendChild(botonConfirmado(`Update to ${r.destino === "origin/main" ? "latest" : r.destino}`,
+      "Saves everything, updates and restarts (~1 min, longer if the engine changes). If it fails, it goes back by itself",
+      "", async () => {
+        const a = await api("/sistema/actualizar", { destino: r.destino });
+        if (a.simulado) { aviso(a.mensaje); return; }
+        sessionStorage.setItem("esperandoActualizacion", "1");
+        seccionActualizar(cuerpo);
+      }));
+  };
   const buscar = nuevo("button", "pildora on", "CHECK FOR UPDATES");
-  const zonaActualizar = nuevo("div", "conf-ctrl");
   buscar.addEventListener("click", async () => {
     resultado.textContent = "Checking…";
-    zonaActualizar.innerHTML = "";
+    zona.innerHTML = "";
+    try { mostrar(await api("/sistema/buscar_actualizacion", {})); } catch (e) { resultado.textContent = e.message; }
+  });
+  const entrada = nuevo("input");
+  entrada.type = "file";
+  entrada.accept = ".bundle";
+  entrada.hidden = true;
+  const usb = nuevo("button", "pildora", "FROM A USB DRIVE");
+  usb.addEventListener("click", () => entrada.click());
+  entrada.addEventListener("change", async () => {
+    const f = entrada.files[0];
+    if (!f) return;
+    resultado.textContent = `Reading ${f.name}…`;
+    zona.innerHTML = "";
     try {
-      const r = await api("/sistema/buscar_actualizacion", {});
-      if (!r.hay) { resultado.textContent = "You have the latest version."; return; }
-      resultado.innerHTML = `<b>${r.cantidad} update${r.cantidad === 1 ? "" : "s"} available:</b><ul>${r.novedades.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
-      zonaActualizar.appendChild(botonConfirmado("Update now", "Saves everything, updates and restarts the app (~1 min)", "", async () => {
-        const a = await api("/sistema/actualizar", {});
-        aviso(a.simulado ? a.mensaje : `Updated ${a.antes} → ${a.despues}. Restarting…`);
-      }));
+      const r = await fetch("/sistema/actualizacion_usb", {
+        method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Cliente": ID_CLIENTE }, body: f,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      mostrar(d);
     } catch (e) {
       resultado.textContent = e.message;
     }
+    entrada.value = "";
   });
-  t.appendChild(filaConfig("Needs internet (Wi-Fi or cable)", buscar));
-  t.append(resultado, zonaActualizar);
+  t.appendChild(filaConfig("Internet, or a package on a USB drive (PedalSistema-vX.Y.Z.bundle)", buscar, usb, entrada));
+  t.append(resultado, zona);
   col.appendChild(t);
   cuerpo.appendChild(col);
 }

@@ -32,6 +32,8 @@ POR_DEFECTO: dict[str, Any] = {
     "salidas": {},
     # Pedalera: qué dispositivo MIDI y qué instrumento controla.
     "midi": {"dispositivo": None, "linea": None},
+    # "estable": solo versiones marcadas como probadas (v1.2.0). "desarrollo": lo último de main.
+    "actualizaciones": {"canal": "estable"},
 }
 
 _lock = threading.Lock()

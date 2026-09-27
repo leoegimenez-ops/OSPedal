@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Actualizador de PedalSistema, con vuelta atrás automática.
+
+Corre APARTE del servidor (servicio pedalsistema-actualizar, como root): el servidor se reinicia
+durante la actualización y no puede vigilarse a sí mismo. Pasos:
+
+  1. Anota la versión actual (para poder volver).
+  2. Pasa a la versión pedida: una versión estable ("v1.2.0", canal estable) o lo último de
+     desarrollo ("origin/main"). Nunca pisa cambios locales: si el equipo tiene archivos del
+     programa modificados, no actualiza.
+  3. Si cambiaron las dependencias de Python, las instala.
+  4. Corre os/post-actualizacion.sh DE LA VERSIÓN NUEVA: servicios del sistema, paquetes de
+     Debian que falten y, si cambió os/MOTOR_VERSION, recompila el motor.
+  5. Reinicia la app y espera a que responda CON LA VERSIÓN NUEVA (hasta PS_ESPERA segundos).
+  6. Si no responde: vuelve a la versión anterior (mismos pasos) y deja escrito el motivo.
+
+El resultado queda en config/actualizacion.json y la pantalla SYSTEM > Update lo muestra al
+volver. Los datos del usuario (setlists, configuración, IR, capturas) no están en git: ni la
+actualización ni la vuelta atrás los tocan.
+
+Uso: actualizar --pedido           (lee destino de config/actualizacion.json; así lo lanza el servicio)
+     actualizar --destino v1.2.0   (a mano)
+Para las pruebas (server/test_actualizar.py) todo es configurable por entorno: PS_RAIZ,
+PS_CMD_REINICIO, PS_URL_SALUD, PS_ESPERA, PS_SIN_POST.
+Solo biblioteca estándar.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+RAIZ = Path(os.environ.get("PS_RAIZ", Path(__file__).resolve().parent.parent.parent))
+ESTADO = Path(os.environ.get("PS_ESTADO_ACTUALIZACION", RAIZ / "config" / "actualizacion.json"))
+CMD_REINICIO = os.environ.get("PS_CMD_REINICIO", "systemctl restart pedalsistema")
+URL_SALUD = os.environ.get("PS_URL_SALUD", "http://127.0.0.1:8000/sistema/version")
+ESPERA = float(os.environ.get("PS_ESPERA", "120"))
+USUARIO = os.environ.get("PS_USUARIO", "pedal")
+
+
+def git(*args: str, timeout: float = 120) -> str:
+    # safe.directory: corre como root sobre un repo del usuario "pedal".
+    r = subprocess.run(["git", "-c", f"safe.directory={RAIZ}", "-C", str(RAIZ), *args],
+                       capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)}: {(r.stderr or r.stdout).strip()}")
+    return r.stdout.strip()
+
+
+def guardar_estado(estado: dict) -> None:
+    ESTADO.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ESTADO.with_name(f".{ESTADO.name}.tmp")
+    tmp.write_text(json.dumps(estado, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, ESTADO)
+
+
+def paso(estado: dict, texto: str) -> None:
+    print(f"PedalSistema actualizar: {texto}", flush=True)
+    estado.setdefault("pasos", []).append({"t": round(time.time()), "texto": texto})
+    guardar_estado(estado)
+
+
+def cambio(anterior: str, nuevo: str, *rutas: str) -> bool:
+    return bool(git("diff", "--name-only", anterior, nuevo, "--", *rutas))
+
+
+def instalar_dependencias() -> None:
+    pip = RAIZ / ".venv" / "bin" / "pip"
+    if pip.exists():
+        subprocess.run([str(pip), "install", "-q", "-r", str(RAIZ / "server" / "requirements.txt"),
+                        "-r", str(RAIZ / "engine" / "requirements.txt")], check=True, timeout=900)
+
+
+def post_actualizacion(anterior: str, nuevo: str) -> None:
+    script = RAIZ / "os" / "post-actualizacion.sh"
+    if os.environ.get("PS_SIN_POST") == "1" or not script.exists():
+        return
+    subprocess.run(["bash", str(script)], check=True, timeout=5400,
+                   env={**os.environ, "PS_ANTERIOR": anterior, "PS_NUEVO": nuevo, "PS_RAIZ": str(RAIZ)})
+
+
+def devolver_a_usuario() -> None:
+    """Corriendo como root, los archivos nuevos quedarían de root: el servicio de la app (usuario
+    pedal) no podría escribir. Se los devuelve."""
+    if os.geteuid() == 0:
+        subprocess.run(["chown", "-R", f"{USUARIO}:{USUARIO}", str(RAIZ)], check=False)
+
+
+def responde_con(commit: str) -> tuple[bool, str]:
+    limite = time.monotonic() + ESPERA
+    ultimo = "no response"
+    while time.monotonic() < limite:
+        try:
+            with urllib.request.urlopen(URL_SALUD, timeout=5) as r:
+                datos = json.loads(r.read())
+            if datos.get("commit") and commit.startswith(datos["commit"]):
+                return True, "ok"
+            ultimo = f"answers with version {datos.get('commit')}, expected {commit[:7]}"
+        except Exception as exc:  # noqa: BLE001 -- arrancando, caído, error 500...
+            ultimo = str(exc)
+        time.sleep(2)
+    return False, ultimo
+
+
+def pasar_a(estado: dict, anterior: str, destino_commit: str) -> None:
+    git("checkout", "--quiet", "--detach", destino_commit)
+    if cambio(anterior, destino_commit, "server/requirements.txt", "engine/requirements.txt"):
+        paso(estado, "Installing Python dependencies")
+        instalar_dependencias()
+    paso(estado, "Updating system services / packages / engine if needed")
+    post_actualizacion(anterior, destino_commit)
+    devolver_a_usuario()
+    paso(estado, "Restarting the app")
+    subprocess.run(CMD_REINICIO, shell=True, check=False, timeout=120)
+
+
+def main() -> int:
+    if "--pedido" in sys.argv:
+        pedido = json.loads(ESTADO.read_text(encoding="utf-8"))
+        destino = pedido["destino"]
+    elif "--destino" in sys.argv:
+        destino = sys.argv[sys.argv.index("--destino") + 1]
+    else:
+        print(__doc__)
+        return 2
+
+    anterior = git("rev-parse", "HEAD")
+    estado = {"estado": "en_curso", "destino": destino, "anterior": anterior[:7],
+              "anterior_version": git("describe", "--tags", "--always"), "inicio": round(time.time()), "pasos": []}
+    guardar_estado(estado)
+    try:
+        # Nada de archivos del programa modificados a mano en el equipo (los datos del usuario no
+        # cuentan: están fuera de git).
+        if git("status", "--porcelain", "--untracked-files=no"):
+            raise RuntimeError("The program files were modified on this system: update cancelled")
+        destino_commit = git("rev-parse", f"{destino}^{{commit}}")
+        paso(estado, f"Going to {destino}")
+        pasar_a(estado, anterior, destino_commit)
+        ok, motivo = responde_con(destino_commit)
+        if ok:
+            estado.update({"estado": "ok", "version": git("describe", "--tags", "--always"),
+                           "fin": round(time.time())})
+            paso(estado, "Update finished")
+            return 0
+        razon = f"The new version didn't start ({motivo})"
+    except Exception as exc:  # noqa: BLE001
+        razon = str(exc)
+
+    # -- Vuelta atrás -------------------------------------------------------------------------
+    estado["motivo"] = razon
+    paso(estado, f"Going back to {estado['anterior_version']}: {razon}")
+    try:
+        actual = git("rev-parse", "HEAD")
+        if actual != anterior:
+            pasar_a(estado, actual, anterior)
+        ok, motivo = responde_con(anterior)
+        estado["estado"] = "revertida" if ok else "revertida_sin_respuesta"
+    except Exception as exc:  # noqa: BLE001
+        estado["estado"] = "error"
+        estado["motivo"] = f"{razon}. Going back also failed: {exc}"
+    estado.update({"version": git("describe", "--tags", "--always"), "fin": round(time.time())})
+    guardar_estado(estado)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

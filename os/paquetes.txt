@@ -1,0 +1,18 @@
+# Paquetes de Debian que necesita PedalSistema (uno por línea; # = comentario).
+# Los usan os/instalar.sh y, al actualizar, os/post-actualizacion.sh (instala los que falten).
+jackd2
+alsa-utils
+python3-venv
+python3-pip
+git
+curl
+rsync
+network-manager
+avahi-daemon
+polkitd
+dbus
+fonts-inter
+# Pantalla del equipo (se saltean con --sin-pantalla)
+cage
+chromium
+seatd

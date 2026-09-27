@@ -33,6 +33,7 @@ _DIR_MODELOS_TEST = tempfile.mkdtemp(prefix="modelos_test_")
 os.environ["PS_MODELOS"] = _DIR_MODELOS_TEST
 _DIR_CONFIG_TEST = tempfile.mkdtemp(prefix="config_test_")
 os.environ["PS_CONFIG"] = os.path.join(_DIR_CONFIG_TEST, "equipo.json")
+os.environ["PS_ESTADO_ACTUALIZACION"] = os.path.join(_DIR_CONFIG_TEST, "actualizacion.json")
 _FIFO_MIDI = os.path.join(_DIR_CONFIG_TEST, "pedalera_falsa")
 os.mkfifo(_FIFO_MIDI)
 os.environ["PS_MIDI_EXTRA"] = _FIFO_MIDI
@@ -908,10 +909,10 @@ r = client.get("/sistema/version")
 check("version instalada (commit del repo)", r.status_code == 200 and r.json()["commit"], f"-> {r.json()}")
 r = client.post("/sistema/buscar_actualizacion", headers={"Cf-Connecting-Ip": "1.2.3.4"})
 check("buscar actualizacion desde el tunel: 403", r.status_code == 403)
-r = client.post("/sistema/actualizar")
+r = client.post("/sistema/actualizar", json={"destino": "origin/main"})
 check("actualizar en desarrollo: simulado (no toca la copia de trabajo)",
       r.status_code == 200 and r.json()["simulado"] is True, f"-> {r.text}")
-r = client.post("/sistema/actualizar", headers={"X-Forwarded-For": "10.0.0.2"})
+r = client.post("/sistema/actualizar", json={"destino": "origin/main"}, headers={"X-Forwarded-For": "10.0.0.2"})
 check("actualizar desde otro dispositivo: 403", r.status_code == 403)
 r = client.get("/red/estado")
 check("estado de red sin nmcli: lo dice, no falla", r.status_code == 200 and r.json()["disponible"] in (True, False),

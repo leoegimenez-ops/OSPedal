@@ -1,0 +1,13 @@
+[Unit]
+Description=PedalSistema - actualización (con vuelta atrás automática)
+Documentation=file:///opt/pedalsistema/os/README.md
+# La lanza la app (SYSTEM > Update) con "systemctl start"; corre aparte porque la app se
+# reinicia en el medio. Como root: reinstala servicios, paquetes y, si hace falta, el motor.
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/pedalsistema
+ExecStart=/opt/pedalsistema/os/bin/actualizar --pedido
+# Compilar el motor puede llevar un buen rato en un equipo modesto.
+TimeoutStartSec=2h

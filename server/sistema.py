@@ -17,10 +17,13 @@ entera con todo lo que corre adentro.
 from __future__ import annotations
 
 import io
+import json
 import os
+import re
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -165,11 +168,20 @@ def qr(texto: str) -> Response:
 
 # -- Versión y actualizaciones -------------------------------------------------------------
 #
-# El equipo tiene el repo clonado (la imagen del OS lo instala con git). "Buscar" hace git fetch
-# y cuenta lo nuevo; "Actualizar" guarda todo, trae la versión nueva SOLO si es avance directo
-# (--ff-only: nunca mezcla ni pisa cambios locales), actualiza dependencias y reinicia el servicio.
+# El equipo tiene el programa como repo de git. Dos canales:
+#   - "estable" (por defecto): solo versiones marcadas como probadas, tags "v1.2.0". Nunca ofrece
+#     una versión más vieja que la instalada.
+#   - "desarrollo": lo último de main (para probar antes de marcar una versión).
+# Actualizar NO lo hace el servidor (se reinicia en el medio): escribe el pedido y lanza el
+# servicio pedalsistema-actualizar (os/bin/actualizar), que reinstala lo necesario, reinicia,
+# comprueba que la versión nueva arranca y, si no, vuelve sola a la anterior.
+# Sin internet: el mismo proceso con un paquete de actualización traído en un pendrive
+# (os/bin/crear-paquete-usb lo arma).
 
-RAIZ = Path(__file__).resolve().parent.parent
+RAIZ = Path(os.environ.get("PS_RAIZ_REPO", Path(__file__).resolve().parent.parent))
+ESTADO_ACTUALIZACION = Path(os.environ.get("PS_ESTADO_ACTUALIZACION",
+                                           RAIZ / "config" / "actualizacion.json"))
+MAX_PAQUETE = 300 * 1024 * 1024
 
 
 def _git(*args: str, timeout: float = 30) -> str:
@@ -179,49 +191,150 @@ def _git(*args: str, timeout: float = 30) -> str:
     return r.stdout.strip()
 
 
+def _clave_version(tag: str) -> tuple[int, ...] | None:
+    m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def _versiones_estables() -> list[str]:
+    tags = [t for t in _git("tag", "-l", "v*").splitlines() if _clave_version(t)]
+    return sorted(tags, key=_clave_version)
+
+
+def _es_ancestro(a: str, b: str) -> bool:
+    """¿`a` ya está contenido en `b`? (b es igual o más nuevo que a)"""
+    r = subprocess.run(["git", "-C", str(RAIZ), "merge-base", "--is-ancestor", a, b],
+                       capture_output=True, timeout=30)
+    return r.returncode == 0
+
+
+def _canal() -> str:
+    from server import config_equipo   # noqa: PLC0415
+    return config_equipo.leer()["actualizaciones"].get("canal", "estable")
+
+
+def _destino_disponible(canal: str) -> str | None:
+    """La versión a la que actualizar, o None si ya está en la última de su canal."""
+    if canal == "desarrollo":
+        destino = "origin/main"
+        try:
+            _git("rev-parse", "--verify", "--quiet", destino)
+        except HTTPException:
+            return None
+    else:
+        estables = _versiones_estables()
+        if not estables:
+            return None
+        destino = estables[-1]
+    # Si lo instalado ya contiene al destino (igual o más nuevo), no hay nada que hacer: así nunca
+    # se ofrece bajar de versión (p. ej. al pasar de "desarrollo" a "estable").
+    return None if _es_ancestro(destino, "HEAD") else destino
+
+
+def _info_destino(destino: str | None) -> dict[str, Any]:
+    if not destino:
+        return {"hay": False, "destino": None, "cantidad": 0, "novedades": []}
+    lista = [l for l in _git("log", "--format=%s", f"HEAD..{destino}").splitlines() if l.strip()]
+    return {"hay": True, "destino": destino, "cantidad": len(lista), "novedades": lista[:12]}
+
+
 @router.get("/version")
 def version() -> dict[str, Any]:
     try:
-        rama = _git("rev-parse", "--abbrev-ref", "HEAD")
-        return {"commit": _git("rev-parse", "--short", "HEAD"), "rama": rama,
+        return {"commit": _git("rev-parse", "--short", "HEAD"),
+                "version": _git("describe", "--tags", "--always"),
                 "fecha": _git("log", "-1", "--format=%cd", "--date=format:%Y-%m-%d %H:%M"),
-                "descripcion": _git("log", "-1", "--format=%s")}
+                "descripcion": _git("log", "-1", "--format=%s"),
+                "canal": _canal()}
     except (HTTPException, OSError, subprocess.TimeoutExpired):
-        return {"commit": None, "rama": None, "fecha": None, "descripcion": "Unknown version"}
+        return {"commit": None, "version": None, "fecha": None, "descripcion": "Unknown version",
+                "canal": _canal()}
+
+
+class Canal(BaseModel):
+    canal: str
+
+
+@router.post("/canal")
+def elegir_canal(datos: Canal, request: Request) -> dict:
+    exigir_local(request)
+    if datos.canal not in ("estable", "desarrollo"):
+        raise HTTPException(400, "canal: estable | desarrollo")
+    from server import config_equipo   # noqa: PLC0415
+    config_equipo.actualizar("actualizaciones", {"canal": datos.canal})
+    return {"ok": True, "canal": datos.canal}
 
 
 @router.post("/buscar_actualizacion")
 def buscar_actualizacion(request: Request) -> dict[str, Any]:
     exigir_local(request)
-    rama = _git("rev-parse", "--abbrev-ref", "HEAD")
+    canal = _canal()
     try:
-        _git("fetch", "--quiet", "origin", rama, timeout=60)
+        _git("fetch", "--quiet", "--tags", "--force", "origin", timeout=60)
+        if canal == "desarrollo":
+            _git("fetch", "--quiet", "origin", "main", timeout=60)
     except subprocess.TimeoutExpired:
         raise HTTPException(504, "No internet connection (or the server is too slow)")
-    nuevos = _git("log", "--format=%s", f"HEAD..origin/{rama}")
-    lista = [l for l in nuevos.splitlines() if l.strip()]
-    return {"hay": bool(lista), "cantidad": len(lista), "novedades": lista[:12]}
+    except HTTPException as exc:
+        raise HTTPException(502, f"Can't reach the update server: {exc.detail}")
+    return {"canal": canal, **_info_destino(_destino_disponible(canal))}
+
+
+@router.post("/actualizacion_usb")
+async def actualizacion_usb(request: Request) -> dict[str, Any]:
+    """Paquete de actualización traído en un pendrive (sin internet). Se verifica que sea un
+    paquete de git válido y se toman sus versiones estables; después se actualiza igual que
+    por internet (con vuelta atrás)."""
+    exigir_local(request)
+    datos = bytearray()
+    async for trozo in request.stream():
+        datos.extend(trozo)
+        if len(datos) > MAX_PAQUETE:
+            raise HTTPException(413, "Update package too big")
+    if not datos.startswith(b"# v2 git bundle") and not datos.startswith(b"# v3 git bundle"):
+        raise HTTPException(400, "That file is not a PedalSistema update package")
+    ruta = Path(tempfile.gettempdir()) / "pedalsistema-actualizacion.bundle"
+    ruta.write_bytes(bytes(datos))
+    try:
+        _git("bundle", "verify", str(ruta), timeout=120)
+        _git("fetch", "--quiet", "--force", str(ruta), "refs/tags/v*:refs/tags/v*", timeout=300)
+    except HTTPException as exc:
+        raise HTTPException(400, f"Invalid update package: {exc.detail}")
+    finally:
+        ruta.unlink(missing_ok=True)
+    return {"canal": "estable", **_info_destino(_destino_disponible("estable"))}
+
+
+class Actualizar(BaseModel):
+    destino: str
 
 
 @router.post("/actualizar")
-def actualizar(request: Request) -> dict[str, Any]:
+def actualizar(datos: Actualizar, request: Request) -> dict[str, Any]:
     exigir_local(request)
-    if not SISTEMA_REAL:
-        return {"ok": True, "simulado": True,
-                "mensaje": "Simulated (development machine): the real system updates and restarts itself"}
+    if datos.destino != "origin/main" and datos.destino not in _versiones_estables():
+        raise HTTPException(400, f"Unknown version: {datos.destino!r}")
     from server import api    # noqa: PLC0415
     api.guardar_todo()
-    rama = _git("rev-parse", "--abbrev-ref", "HEAD")
-    antes = _git("rev-parse", "--short", "HEAD")
-    _git("pull", "--ff-only", "origin", rama, timeout=120)
-    despues = _git("rev-parse", "--short", "HEAD")
-    pip = RAIZ / ".venv" / "bin" / "pip"
-    for req in ("server/requirements.txt", "engine/requirements.txt"):
-        if pip.exists():
-            subprocess.run([str(pip), "install", "-q", "-r", str(RAIZ / req)], timeout=600)
-    # El servicio del OS (systemd) vuelve a levantar el servidor con el código nuevo.
-    subprocess.Popen(["systemctl", "restart", "pedalsistema"], start_new_session=True)
-    return {"ok": True, "simulado": False, "antes": antes, "despues": despues}
+    ESTADO_ACTUALIZACION.parent.mkdir(parents=True, exist_ok=True)
+    ESTADO_ACTUALIZACION.write_text(json.dumps(
+        {"estado": "pedido", "destino": datos.destino, "pedido": round(time.time())}), encoding="utf-8")
+    if not SISTEMA_REAL:
+        return {"ok": True, "simulado": True, "destino": datos.destino,
+                "mensaje": "Simulated (development machine): the real system updates, checks and restarts itself"}
+    # El actualizador corre aparte (esta app se va a reiniciar en el medio).
+    subprocess.Popen(["systemctl", "start", "--no-block", "pedalsistema-actualizar.service"],
+                     start_new_session=True)
+    return {"ok": True, "simulado": False, "destino": datos.destino}
+
+
+@router.get("/actualizacion")
+def estado_actualizacion() -> dict[str, Any]:
+    """Resultado de la última actualización (ok / revertida y por qué / en curso)."""
+    try:
+        return json.loads(ESTADO_ACTUALIZACION.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"estado": None}
 
 
 # -- Energía ------------------------------------------------------------------------------

@@ -1263,3 +1263,18 @@ body {
   padding: 4px 10px; border-radius: 7px; border: 1px solid var(--borde); background: var(--sup2);
   font-size: 12px; color: var(--tenue);
 }
+
+/* -- SYSTEM > Update: resultado de la última actualización ------------------------------------- */
+
+.act-estado {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--borde); background: #121215;
+}
+.act-estado b { font-size: 14px; }
+.act-estado small { color: var(--tenue); font-size: 12.5px; line-height: 1.4; }
+.act-estado.ok { border-color: color-mix(in srgb, var(--ok) 60%, transparent); }
+.act-estado.ok b { color: var(--ok); }
+.act-estado.pedido, .act-estado.en_curso { border-color: var(--activo); }
+.act-estado.pedido b, .act-estado.en_curso b { color: var(--activo); }
+.act-estado.revertida, .act-estado.revertida_sin_respuesta, .act-estado.error { border-color: color-mix(in srgb, var(--error) 60%, transparent); }
+.act-estado.revertida b, .act-estado.revertida_sin_respuesta b, .act-estado.error b { color: var(--error); }

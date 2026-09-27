@@ -1,0 +1,17 @@
+#!/bin/bash
+# Arma un paquete de actualización para llevar en un pendrive (equipos sin internet).
+#
+#   os/bin/crear-paquete-usb v1.2.0      -> PedalSistema-v1.2.0.bundle
+#
+# En el equipo: SYSTEM > Update > "Update from a USB drive" y elegir el archivo. Se instala con
+# la misma vuelta atrás automática que por internet. El paquete tiene la historia completa hasta
+# esa versión, así sirve aunque el equipo esté varias versiones atrás.
+set -euo pipefail
+VERSION="${1:?Uso: $0 vX.Y.Z}"
+RAIZ="$(cd "$(dirname "$0")/../.." && pwd)"
+git -C "$RAIZ" rev-parse --verify --quiet "refs/tags/$VERSION" >/dev/null \
+  || { echo "No existe la versión $VERSION (git tag)"; exit 1; }
+SALIDA="${2:-$PWD/PedalSistema-$VERSION.bundle}"
+git -C "$RAIZ" bundle create "$SALIDA" "refs/tags/$VERSION"
+git -C "$RAIZ" bundle verify "$SALIDA" >/dev/null
+echo "Listo: $SALIDA ($(du -h "$SALIDA" | cut -f1))"

@@ -13,7 +13,8 @@ polkit.addRule(function (action, subject) {
     // Reiniciar SOLO sus propios servicios (SYSTEM > Update y reinicio del audio).
     if (action.id === "org.freedesktop.systemd1.manage-units") {
         var unidad = action.lookup("unit");
-        if (unidad === "pedalsistema.service" || unidad === "pedalsistema-jack.service") {
+        if (unidad === "pedalsistema.service" || unidad === "pedalsistema-jack.service" ||
+            unidad === "pedalsistema-actualizar.service") {
             return polkit.Result.YES;
         }
     }
