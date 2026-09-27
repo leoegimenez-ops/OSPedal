@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Arranca el servidor de audio (jackd) con lo elegido en SYSTEM > Audio (config/equipo.json).
+
+Lo usa el servicio pedalsistema-jack. Sin interfaz elegida, usa la primera tarjeta de sonido con
+entrada; sin ninguna tarjeta, el driver "dummy" (sin sonido, pero la app y los motores andan
+igual, así se puede configurar todo antes de enchufar la interfaz).
+
+--dry-run: muestra el comando sin ejecutarlo (para probarlo).
+Solo biblioteca estándar: corre antes del venv del proyecto.
+"""
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parent.parent.parent
+CONFIG = Path(os.environ.get("PS_CONFIG", RAIZ / "config" / "equipo.json"))
+
+
+def primera_tarjeta_con_entrada() -> str | None:
+    """hw:X de la primera tarjeta que tenga captura (la interfaz de audio, no el HDMI)."""
+    try:
+        texto = Path("/proc/asound/pcm").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for linea in texto.splitlines():
+        m = re.match(r"(\d+)-(\d+):.*capture", linea)
+        if m:
+            return f"hw:{int(m.group(1))},{int(m.group(2))}"
+    return None
+
+
+def comando() -> list[str]:
+    try:
+        audio = json.loads(CONFIG.read_text(encoding="utf-8")).get("audio", {})
+    except (OSError, ValueError):
+        audio = {}
+    frecuencia = str(int(audio.get("frecuencia") or 48000))
+    buffer_ = str(int(audio.get("buffer") or 256))
+    periodos = str(int(audio.get("periodos") or 2))
+    dispositivo = audio.get("dispositivo") or primera_tarjeta_con_entrada()
+    base = ["jackd", "-R", "-P", "80", "-t", "2000"]
+    if not dispositivo:
+        return base + ["-d", "dummy", "-r", frecuencia, "-p", buffer_]
+    return base + ["-d", "alsa", "-d", dispositivo, "-r", frecuencia, "-p", buffer_, "-n", periodos]
+
+
+if __name__ == "__main__":
+    cmd = comando()
+    if "--dry-run" in sys.argv:
+        print(" ".join(cmd))
+        sys.exit(0)
+    print("PedalSistema: " + " ".join(cmd), flush=True)
+    os.execvp(cmd[0], cmd)

@@ -1,0 +1,20 @@
+[Unit]
+Description=PedalSistema - servidor de audio (JACK)
+Documentation=file:///opt/pedalsistema/os/README.md
+After=sound.target
+# Si la interfaz USB se enchufa tarde, el servicio reintenta (Restart=always).
+
+[Service]
+Type=simple
+User=pedal
+Group=audio
+ExecStart=/opt/pedalsistema/os/bin/arrancar-jack
+Restart=always
+RestartSec=2
+# Tiempo real y memoria bloqueada: sin esto JACK no puede evitar cortes a buffers chicos.
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+Environment=JACK_NO_AUDIO_RESERVATION=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=PedalSistema - CPU en modo rendimiento (menos latencia, sin cortes)
+Before=pedalsistema-jack.service
+
+[Service]
+Type=oneshot
+# Con el ahorro de energía la CPU baja la frecuencia entre buffers y eso produce cortes (xruns)
+# a latencias bajas. En un equipo dedicado al audio, siempre a máxima frecuencia.
+ExecStart=/bin/sh -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -w "$g" ] && echo performance > "$g"; done; true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+[Unit]
+Description=PedalSistema - app, motores (Guitarix), mezcla y pedalera
+Documentation=file:///opt/pedalsistema/os/README.md
+After=network-online.target pedalsistema-jack.service
+Requires=pedalsistema-jack.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pedal
+Group=audio
+WorkingDirectory=/opt/pedalsistema
+# PS_SISTEMA_REAL=1: apagar/reiniciar/actualizar desde SYSTEM funcionan de verdad (en desarrollo
+# se simulan). El servidor levanta un Guitarix por instrumento y por tramo (engine/motores.py).
+Environment=PS_SISTEMA_REAL=1
+Environment=PS_LANZAR_MOTORES=1
+Environment=PS_PUERTO=8000
+# 0.0.0.0: la tablet y el celular entran por la red local (Wi-Fi del lugar o el Wi-Fi propio).
+ExecStart=/opt/pedalsistema/.venv/bin/uvicorn server.api:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=2
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+# Al apagar: el servidor guarda las setlists antes de salir.
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

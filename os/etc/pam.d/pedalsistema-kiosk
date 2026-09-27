@@ -1,0 +1,6 @@
+# Sesión de la pantalla del equipo (pedalsistema-kiosk.service): inicio automático del usuario
+# "pedal" en tty1, con sesión de logind (la necesita cage para usar pantalla, táctil y teclado).
+auth     required pam_unix.so nullok
+account  required pam_unix.so
+session  required pam_unix.so
+session  required pam_systemd.so

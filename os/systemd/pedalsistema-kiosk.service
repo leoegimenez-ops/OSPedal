@@ -1,0 +1,30 @@
+[Unit]
+Description=PedalSistema - pantalla del equipo (la app a pantalla completa)
+Documentation=file:///opt/pedalsistema/os/README.md
+After=systemd-user-sessions.service plymouth-quit-wait.service dbus.socket systemd-logind.service pedalsistema.service
+Wants=dbus.socket systemd-logind.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+ConditionPathExists=/dev/tty1
+
+[Service]
+Type=simple
+User=pedal
+# cage: compositor Wayland que muestra UNA sola app a pantalla completa (táctil y mouse).
+# -d: sin decoraciones. Si el navegador se cierra, cage termina y systemd lo vuelve a abrir.
+ExecStart=/usr/bin/cage -d -- /opt/pedalsistema/os/bin/kiosk.sh
+Restart=always
+RestartSec=2
+UtmpIdentifier=tty1
+UtmpMode=user
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+PAMName=pedalsistema-kiosk
+
+[Install]
+WantedBy=graphical.target

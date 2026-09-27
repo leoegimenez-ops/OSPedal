@@ -1,0 +1,25 @@
+// PedalSistema: lo mínimo que la app (usuario "pedal", sin ser administrador) necesita hacer
+// desde la pantalla SYSTEM. El servidor además exige que el pedido venga de la pantalla local
+// (server/sistema.py): desde la red o internet estas acciones ni llegan hasta acá.
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "pedal") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    // Apagar y reiniciar el equipo (SYSTEM > Power).
+    if (action.id.indexOf("org.freedesktop.login1.power-off") === 0 ||
+        action.id.indexOf("org.freedesktop.login1.reboot") === 0) {
+        return polkit.Result.YES;
+    }
+    // Reiniciar SOLO sus propios servicios (SYSTEM > Update y reinicio del audio).
+    if (action.id === "org.freedesktop.systemd1.manage-units") {
+        var unidad = action.lookup("unit");
+        if (unidad === "pedalsistema.service" || unidad === "pedalsistema-jack.service") {
+            return polkit.Result.YES;
+        }
+    }
+    // Wi-Fi y Wi-Fi propio (SYSTEM > Network).
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

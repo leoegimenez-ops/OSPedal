@@ -2142,6 +2142,10 @@ async function seccionConectar(cuerpo) {
   let i;
   try { i = await infoSistema(); } catch (e) { cuerpo.textContent = e.message; return; }
   const urls = i.red.map((r) => ({ etiqueta: `${r.interfaz} · same Wi-Fi / network`, url: `http://${r.ip}:${i.puerto}/app/` }));
+  if (i.real && urls.length) {
+    // En el equipo real (avahi): una dirección fija que no cambia aunque cambie la IP.
+    urls.unshift({ etiqueta: "Easy address · same Wi-Fi / network", url: `http://${i.equipo}.local:${i.puerto}/app/` });
+  }
   if (i.tunel) urls.push({ etiqueta: "Internet (temporary link)", url: `${i.tunel}/app/` });
   cuerpo.innerHTML = "";
   if (!urls.length) {
